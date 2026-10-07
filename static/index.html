@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAN Shooter</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Join -->
+  <section id="screen-join" class="screen panel-screen">
+    <div class="panel">
+      <h1>LAN SHOOTER</h1>
+      <form id="join-form" autocomplete="off">
+        <label for="name-input">Enter your name:</label>
+        <input id="name-input" maxlength="16" required autofocus>
+        <button type="submit" class="big">JOIN GAME</button>
+      </form>
+      <p id="join-error" class="error"></p>
+    </div>
+  </section>
+
+  <!-- Waiting (match in progress / not part of it) -->
+  <section id="screen-waiting" class="screen panel-screen hidden">
+    <div class="panel">
+      <h1>MATCH IN PROGRESS</h1>
+      <p id="waiting-text">A match is currently being played.<br>You'll join automatically when it's over.</p>
+      <p class="muted">Time remaining: <span id="waiting-timer">--:--</span></p>
+    </div>
+  </section>
+
+  <!-- Lobby -->
+  <section id="screen-lobby" class="screen panel-screen hidden">
+    <div class="panel wide">
+      <h1>CHOOSE YOUR TEAM</h1>
+      <p class="muted">Playing as <b id="lobby-name"></b></p>
+      <div id="team-buttons" class="team-buttons"></div>
+      <p id="lobby-error" class="error"></p>
+      <p id="lobby-status" class="muted">Waiting for the admin to start the game…</p>
+    </div>
+  </section>
+
+  <!-- Game -->
+  <section id="screen-game" class="screen hidden">
+    <div id="hud-top" class="hud">
+      <div id="hud-scores"></div>
+      <div id="hud-timer">00:00</div>
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="kill-feed"></div>
+      <div id="death-overlay" class="overlay hidden">
+        <h2>YOU DIED</h2>
+        <p>Respawning in <span id="respawn-count">3</span>…</p>
+      </div>
+      <div id="results-overlay" class="overlay results hidden"></div>
+    </div>
+    <div id="hud-bottom" class="hud">
+      <div id="hud-health"></div>
+      <div id="hud-kills"></div>
+    </div>
+  </section>
+
+  <div id="conn-banner" class="hidden">Connection lost — reconnecting…</div>
+
+  <script src="/static/render.js"></script>
+  <script src="/static/client.js"></script>
+</body>
+</html>

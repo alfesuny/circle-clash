@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAN Shooter Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .admin { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+    .card { background: #1c1f27; border: 1px solid #2c303b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .state { font-weight: 800; font-size: 1.2rem; }
+    .state.LOBBY { color: #f1c40f; } .state.RUNNING { color: #2ecc71; } .state.ENDED { color: #e67e22; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2c303b; }
+    th { color: #8a90a0; font-weight: 600; }
+    input[type=number] { width: 80px; }
+    .btn-start { background: #2e9e5b; } .btn-end { background: #c0392b; }
+    .teams td:first-child { font-weight: 800; }
+  </style>
+</head>
+<body>
+  <section id="login" class="panel-screen">
+    <div class="panel">
+      <h1>ADMIN LOGIN</h1>
+      <form id="login-form" class="row" style="justify-content:center">
+        <input id="password" type="password" placeholder="Admin password" required autofocus>
+        <button type="submit" class="big">LOG IN</button>
+      </form>
+      <p class="muted">The password is printed in the server console.</p>
+      <p id="login-error" class="error"></p>
+    </div>
+  </section>
+
+  <section id="dash" class="admin hidden">
+    <h1>LAN SHOOTER — ADMIN</h1>
+
+    <div class="card row" style="justify-content:space-between">
+      <div>State: <span id="state" class="state"></span></div>
+      <div>Time: <b id="time">--:--</b></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Teams</h3>
+      <table class="teams"><tbody id="teams"></tbody></table>
+      <p>Total: <b id="total"></b></p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Match</h3>
+      <div class="row">
+        Game duration:
+        <input id="minutes" type="number" min="0" max="60" value="5"> min
+        <input id="seconds" type="number" min="0" max="59" value="0"> sec
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button id="btn-start" class="big btn-start">START GAME</button>
+        <button id="btn-end" class="big btn-end">END GAME</button>
+        <button id="btn-lobby" class="big">BACK TO LOBBY</button>
+      </div>
+      <p id="action-error" class="error"></p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Players</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Team</th><th>Status</th><th>Kills</th><th>Deaths</th><th>Score</th></tr></thead>
+        <tbody id="players"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>
