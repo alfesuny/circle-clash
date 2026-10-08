@@ -255,13 +255,43 @@ def test_spawn_zone_prevents_damage():
     assert b.health == GAME_CONFIG["player_health"]
 
 
-def test_enemy_spawn_zone_does_not_protect_intruder():
+def test_bullets_fired_from_spawn_do_not_leave_it():
     g, a, b, t = running_duel()
-    zone = MAP["spawn_zones"]["red"]  # blue player standing in RED's spawn
-    place(b, zone["x"] + 60, zone["y"] + 60)
-    place(a, zone["x"] + 60, zone["y"] + 180)
-    shoot_and_resolve(g, a, b, t)
+    zone = MAP["spawn_zones"]["red"]  # x 20..150, y 20..150
+    place(a, zone["x"] + 100, zone["y"] + 65)   # inside own spawn
+    place(b, zone["x"] + zone["width"] + R, a.y)  # pressed against the zone edge, in the line of fire
+    bullet, t = shoot_and_resolve(g, a, b, t)
+    assert bullet.confine is not None
+    assert b.health == GAME_CONFIG["player_health"]
+    assert not g.bullets
+
+
+def test_bullets_fired_outside_spawn_travel_normally():
+    g, a, b, t = running_duel()
+    zone = MAP["spawn_zones"]["red"]
+    place(a, zone["x"] + zone["width"] + 5, zone["y"] + 65)  # just outside own spawn
+    place(b, a.x + 100, a.y)
+    bullet, _ = shoot_and_resolve(g, a, b, t)
+    assert bullet.confine is None
     assert b.health == GAME_CONFIG["player_health"] - 1
+
+
+def test_cannot_enter_enemy_spawn():
+    g, a, b, t = running_duel()
+    zone = MAP["spawn_zones"]["red"]
+    place(b, zone["x"] + zone["width"] + 40, zone["y"] + 65)  # blue, right of RED spawn
+    g.set_keys(b.id, {"a": True})
+    run(g, t, 2)
+    assert b.x >= zone["x"] + zone["width"] + R - 1e-6
+
+
+def test_can_walk_back_into_own_spawn():
+    g, a, b, t = running_duel()
+    zone = MAP["spawn_zones"]["red"]
+    place(a, zone["x"] + zone["width"] + 40, zone["y"] + 65)
+    g.set_keys(a.id, {"a": True})
+    run(g, t, 0.4)  # ~88 units: well inside the 130-wide zone
+    assert g.in_own_spawn(a)
 
 
 # ------------------------------------------------------------------ timer/results

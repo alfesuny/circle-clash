@@ -72,6 +72,21 @@ def segment_rect_hit(x0: float, y0: float, x1: float, y1: float, rect: dict,
     return t_min
 
 
+def segment_rect_exit(x0: float, y0: float, x1: float, y1: float, rect: dict) -> float:
+    """For a segment starting inside rect, the fraction t in [0, 1] where it
+    leaves rect (1.0 if it never does)."""
+    t = 1.0
+    for p0, d, lo, hi in (
+        (x0, x1 - x0, rect["x"], rect["x"] + rect["width"]),
+        (y0, y1 - y0, rect["y"], rect["y"] + rect["height"]),
+    ):
+        if d > 1e-12:
+            t = min(t, (hi - p0) / d)
+        elif d < -1e-12:
+            t = min(t, (lo - p0) / d)
+    return max(0.0, t)
+
+
 def segment_circle_hit(x0: float, y0: float, x1: float, y1: float,
                        cx: float, cy: float, r: float) -> float | None:
     """Fraction t in [0, 1] where the segment first touches the circle, or None."""

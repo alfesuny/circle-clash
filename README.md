@@ -77,7 +77,9 @@ A keyboard and mouse are required; there are no touch controls yet.
 - 3 teams (RED, GREEN, BLUE), max 5 players each. Team changes are allowed until the match starts.
 - 4 HP; each enemy hit removes 1. No friendly fire. Walls block bullets and movement.
 - Respawn 3 s after death in your team's spawn zone, with 3 s of invulnerability (flashing).
-- You can't be damaged while inside your own team's spawn zone (shield ring).
+- You can't be damaged while inside your own team's spawn zone (shield ring) — but bullets fired from inside your spawn
+  stop at its edge, so to shoot anyone you have to step out and expose yourself.
+- You can't walk into another team's spawn zone.
 - Kill = 10 points. Team score = total kills by its members. Highest team score wins when the timer hits zero.
 - Players who arrive while a match is running wait and join automatically when it ends.
 - Refreshing the browser during a match reconnects you to your player (same team and stats).

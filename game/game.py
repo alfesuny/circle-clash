@@ -33,6 +33,12 @@ class Game:
         self.teams = teams
         self.team_ids = [t["id"] for t in teams]
         self.map = game_map
+        # What blocks each team's movement: all walls plus every *other* team's
+        # spawn zone (players can't enter enemy spawns).
+        self.blockers = {
+            tid: game_map["walls"] + [z for zt, z in game_map["spawn_zones"].items() if zt != tid]
+            for tid in self.team_ids
+        }
         self.state = LOBBY
         self.players: dict[str, Player] = {}
         self.bullets: list[Bullet] = []
@@ -57,11 +63,12 @@ class Game:
         """Players currently taking part in the match (connected and in it)."""
         return (p for p in self.players.values() if p.in_match and p.connected)
 
-    def is_protected(self, p: Player, now: float) -> bool:
-        if now < p.invulnerable_until:
-            return True
+    def in_own_spawn(self, p: Player) -> bool:
         zone = self.map["spawn_zones"].get(p.team)
         return zone is not None and collision.point_in_rect(p.x, p.y, zone)
+
+    def is_protected(self, p: Player, now: float) -> bool:
+        return now < p.invulnerable_until or self.in_own_spawn(p)
 
     def time_remaining(self, now: float | None = None) -> float:
         if self.state == RUNNING and self.ends_at is not None:
@@ -194,7 +201,7 @@ class Game:
         p = self.players.get(player_id)
         if self.state != RUNNING or p is None or not (p.in_match and p.connected and p.alive):
             return None
-        if now - p.last_shot_at < self.cfg["fire_cooldown"]:
+        if now - p.last_shot_at < self.cfg["fire_cooldown"] - 1e-9:  # tolerate float rounding
             return None
         self.set_aim(player_id, angle)
         p.last_shot_at = now
@@ -206,10 +213,19 @@ class Game:
             id=self._next_bullet_id, owner_id=p.id, team=p.team, x=p.x, y=p.y,
             vx=math.cos(p.angle) * speed, vy=math.sin(p.angle) * speed,
             expires_at=now + self.cfg["bullet_lifetime"],
+            confine=self._bullet_confine_zone(p.team) if self.in_own_spawn(p) else None,
         )
         self._next_bullet_id += 1
         self.bullets.append(b)
         return b
+
+    def _bullet_confine_zone(self, team: str) -> dict:
+        """The team's spawn zone shrunk by the bullet radius (+1), so a confined
+        bullet can't graze an enemy pressed against the outside of the zone."""
+        z = self.map["spawn_zones"][team]
+        m = self.cfg["bullet_radius"] + 1
+        return {"x": z["x"] + m, "y": z["y"] + m,
+                "width": max(0, z["width"] - 2 * m), "height": max(0, z["height"] - 2 * m)}
 
     # -------------------------------------------------------------------- tick
     def tick(self, dt: float, now: float | None = None) -> None:
@@ -236,7 +252,7 @@ class Game:
             nx = p.x + dx / length * speed * dt
             ny = p.y + dy / length * speed * dt
             p.x, p.y = collision.resolve_circle_walls(
-                nx, ny, r, self.map["walls"], self.map["width"], self.map["height"])
+                nx, ny, r, self.blockers[p.team], self.map["width"], self.map["height"])
 
     def _move_bullets(self, dt: float, now: float) -> None:
         br = self.cfg["bullet_radius"]
@@ -247,6 +263,12 @@ class Game:
             if now >= b.expires_at:
                 continue
             x1, y1 = b.x + b.vx * dt, b.y + b.vy * dt
+            # A bullet fired from spawn is cut off at the zone edge *before* hit
+            # checks, so it can't reach anyone standing just outside.
+            leaves_spawn = b.confine is not None and not collision.point_in_rect(x1, y1, b.confine)
+            if leaves_spawn:
+                t = collision.segment_rect_exit(b.x, b.y, x1, y1, b.confine)
+                x1, y1 = b.x + (x1 - b.x) * t, b.y + (y1 - b.y) * t
             # Find the earliest thing along this tick's path: a wall or an enemy.
             first_t, victim = None, None
             for wall in self.map["walls"]:
@@ -263,6 +285,8 @@ class Game:
                 if victim is not None and victim.alive:
                     self._apply_hit(b, victim, now)
                 continue  # bullet is consumed by the wall or player
+            if leaves_spawn:
+                continue
             if not (0 <= x1 <= self.map["width"] and 0 <= y1 <= self.map["height"]):
                 continue
             b.x, b.y = x1, y1

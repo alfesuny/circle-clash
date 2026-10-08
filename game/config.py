@@ -18,7 +18,7 @@ GAME_CONFIG = {
     "bullet_speed": 650,              # units / second
     "bullet_radius": 4,
     "bullet_lifetime": 2.0,           # seconds before an unobstructed bullet expires
-    "fire_cooldown": 0.25,            # seconds between shots
+    "fire_cooldown": 0.35,            # seconds between shots
     "respawn_delay": 3,               # seconds
     "spawn_protection_duration": 3,   # seconds of invulnerability after (re)spawning
     "kill_score": 10,

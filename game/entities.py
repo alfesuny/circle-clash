@@ -51,3 +51,6 @@ class Bullet:
     vx: float
     vy: float
     expires_at: float
+    # Set when fired from inside the shooter's own spawn zone: the bullet
+    # can't leave that zone, so players can't shoot safely from spawn.
+    confine: dict | None = None
