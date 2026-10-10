@@ -168,3 +168,12 @@ def test_stalled_client_does_not_block_others(monkeypatch):
         handlers[1].cancel()
 
     asyncio.run(scenario())
+
+
+def test_browsers_always_revalidate_pages_and_scripts(client):
+    """Stale cached scripts from an older version broke joining (page loaded,
+    JOIN did nothing). Every page/asset must be revalidated."""
+    for path in ("/", "/admin", "/static/client.js", "/static/render.js", "/maps/Galadriel/image"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+        assert r.headers.get("etag"), path  # so unchanged files come back as a cheap 304

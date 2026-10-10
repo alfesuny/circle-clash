@@ -223,6 +223,18 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def always_revalidate(request, call_next):
+    """Make browsers check for a newer version of every page/script/image.
+    Without this they may reuse files cached from an older version of the
+    game for hours, and old scripts break against the new server (the page
+    loads but JOIN silently fails). Unchanged files still come back as a
+    cheap 304 thanks to their ETag."""
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC / "index.html")
@@ -249,7 +261,7 @@ async def map_image(map_id: str):
     m = game.maps.get(map_id)
     if m is None:
         raise HTTPException(status_code=404, detail="Unknown map.")
-    return FileResponse(m["image_path"], headers={"Cache-Control": "public, max-age=3600"})
+    return FileResponse(m["image_path"])
 
 
 # ------------------------------------------------------------- game websocket
