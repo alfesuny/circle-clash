@@ -104,7 +104,8 @@ def test_map_image_and_admin_map_selection(client):
     assert client.post("/api/admin/map", json={"map_id": "Galadriel"}).status_code == 401
     headers = admin_headers(client)
     status = client.get("/api/admin/status", headers=headers).json()
-    assert status["map_id"] == "Galadriel" and status["maps"][0]["id"] == "Galadriel"
+    assert status["map_id"] == "Galadriel"  # the default map
+    assert {"Galadriel", "CastleBlack", "TheNorth"} <= {m["id"] for m in status["maps"]}
     assert client.post("/api/admin/map", json={"map_id": "Nope"}, headers=headers).status_code == 400
     assert client.post("/api/admin/map", json={"map_id": "Galadriel"}, headers=headers).status_code == 200
 
