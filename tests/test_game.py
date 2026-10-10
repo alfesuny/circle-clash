@@ -68,7 +68,8 @@ def running_duel(team_a="a", team_b="b", duration=300):
 def shoot_and_resolve(g, shooter, target, now):
     angle = math.atan2(target.y - shooter.y, target.x - shooter.x)
     bullet = g.shoot(shooter.id, angle, now=now)
-    return bullet, run(g, now, 0.5)
+    # resolve the shot and let the gun cool down (+1 tick: run() rounds down to whole ticks)
+    return bullet, run(g, now, max(0.5, GAME_CONFIG["fire_cooldown"]) + DT)
 
 
 # ------------------------------------------------------------------ teams/join

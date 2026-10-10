@@ -76,7 +76,7 @@ A keyboard and mouse are required; there are no touch controls yet.
 
 - 2 teams (TEAM A, TEAM B), max 7 players each (14 total). Team changes are allowed until the match starts.
 - 4 lives (hearts); each enemy hit removes one. No friendly fire. Walls block bullets and movement.
-- One shot every 0.5 s (hold the mouse button to keep firing).
+- One shot every 0.75 s (hold the mouse button to keep firing).
 - Respawn 3 s after death in your team's spawn zone, with 3 s of invulnerability (flashing).
 - You can't be damaged while inside your own team's spawn zone (shield ring) — but bullets fired from inside your spawn
   stop at its edge, so to shoot anyone you have to step out and expose yourself.
@@ -115,6 +115,10 @@ and the team list are in [game/config.py](game/config.py).
 To add a team, add an entry to `TEAMS` and a matching spawn zone to every map's `spawn_zones`.
 
 ## Troubleshooting
+
+- If a player's page loads but JOIN does nothing, their browser is probably using files cached from an
+  older version: have them hard-refresh (Ctrl+F5) once. The server tells browsers to always check for
+  updates, so this should only happen with files cached before that was added.
 
 - The server writes `server.log` next to `server.py`. If the game ever freezes, look for
   `Game loop stalled` or `Dropping player …` lines there.
