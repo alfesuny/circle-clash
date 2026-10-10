@@ -285,6 +285,27 @@ def test_no_friendly_fire():
     assert b.health == GAME_CONFIG["player_health"]
 
 
+def test_hitbox_covers_head_and_feet():
+    """Players are drawn standing upright, so the hitbox is a vertical capsule:
+    taller than the movement circle, same width."""
+    reach = R + GAME_CONFIG["bullet_radius"] + GAME_CONFIG["hitbox_half_height"]
+    for dy, hit in ((-(reach - 2), True), (reach - 2, True), (-(reach + 2), False), (reach + 2, False)):
+        g, a, b, t = running_duel()
+        place(a, 580, b.y + dy)
+        g.shoot(a.id, 0.0, now=t)  # straight right, passing b at vertical offset dy
+        run(g, t, 0.5)
+        assert (b.health < GAME_CONFIG["player_health"]) == hit, dy
+
+
+def test_hitbox_is_no_wider_than_the_circle():
+    g, a, b, t = running_duel()
+    side = R + GAME_CONFIG["bullet_radius"] + 2
+    place(a, b.x + side, b.y - 150)
+    g.shoot(a.id, math.pi / 2, now=t)  # straight down, just beside b
+    run(g, t, 0.5)
+    assert b.health == GAME_CONFIG["player_health"]
+
+
 def test_walls_block_bullets():
     g, a, b, t = running_duel()
     # centre vertical wall is x 485..515, y 260..440
@@ -357,6 +378,19 @@ def test_bullets_fired_from_spawn_do_not_leave_it():
     assert bullet.confine is not None
     assert b.health == GAME_CONFIG["player_health"]
     assert not g.bullets
+
+
+def test_spawn_bullets_cannot_reach_enemy_head_below_the_zone():
+    """The taller hitbox reaches into the spawn zone from an enemy standing
+    right below it; a bullet fired from inside must still not hit them."""
+    g, a, b, t = running_duel()
+    zone = TEST_MAP["spawn_zones"]["a"]
+    place(b, zone["x"] + 60, zone["y"] + zone["height"] + R)  # pressed against the bottom edge
+    place(a, b.x, b.y - 60)                                     # inside own spawn, straight above b
+    assert g.in_own_spawn(a)
+    bullet, t = shoot_and_resolve(g, a, b, t)
+    assert bullet.confine is not None
+    assert b.health == GAME_CONFIG["player_health"]
 
 
 def test_bullets_fired_outside_spawn_travel_normally():

@@ -87,6 +87,20 @@ def segment_rect_exit(x0: float, y0: float, x1: float, y1: float, rect: dict) ->
     return max(0.0, t)
 
 
+def segment_capsule_hit(x0: float, y0: float, x1: float, y1: float,
+                        cx: float, cy: float, half_h: float, r: float) -> float | None:
+    """Fraction t in [0, 1] where the segment first touches a vertical capsule
+    (the segment (cx, cy-half_h)-(cx, cy+half_h) widened by r), or None.
+    A capsule is two end circles plus the rectangle between them."""
+    hits = [
+        segment_circle_hit(x0, y0, x1, y1, cx, cy - half_h, r),
+        segment_circle_hit(x0, y0, x1, y1, cx, cy + half_h, r),
+        segment_rect_hit(x0, y0, x1, y1, {"x": cx - r, "y": cy - half_h, "width": 2 * r, "height": 2 * half_h}),
+    ]
+    hits = [t for t in hits if t is not None]
+    return min(hits) if hits else None
+
+
 def segment_circle_hit(x0: float, y0: float, x1: float, y1: float,
                        cx: float, cy: float, r: float) -> float | None:
     """Fraction t in [0, 1] where the segment first touches the circle, or None."""

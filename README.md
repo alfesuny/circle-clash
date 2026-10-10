@@ -76,7 +76,10 @@ A keyboard and mouse are required; there are no touch controls yet.
 
 - 2 teams (TEAM A, TEAM B), max 7 players each (14 total). Team changes are allowed until the match starts.
 - 4 lives (hearts); each enemy hit removes one. No friendly fire. Walls block bullets and movement.
-- One shot every 0.75 s (hold the mouse button to keep firing).
+- One shot every 0.5 s (hold the mouse button to keep firing).
+- Players are drawn as standing soldiers that face and aim toward the mouse and walk when moving.
+  Bullets hit a capsule from head to feet (as wide as the old circle, a bit taller);
+  walls still collide with the round body, so every corridor stays passable.
 - Respawn 3 s after death in your team's spawn zone, with 3 s of invulnerability (flashing).
 - You can't be damaged while inside your own team's spawn zone (shield ring) — but bullets fired from inside your spawn
   stop at its edge, so to shoot anyone you have to step out and expose yourself.

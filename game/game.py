@@ -252,12 +252,15 @@ class Game:
         return b
 
     def _bullet_confine_zone(self, team: str) -> dict:
-        """The team's spawn zone shrunk by the bullet radius (+1), so a confined
-        bullet can't graze an enemy pressed against the outside of the zone."""
+        """The team's spawn zone shrunk so a confined bullet can't reach an
+        enemy pressed against the outside of the zone. Enemies can't enter the
+        zone, but their hitbox reaches hitbox_half_height further up/down than
+        their movement circle, hence the larger vertical margin."""
         z = self.map["spawn_zones"][team]
-        m = self.cfg["bullet_radius"] + 1
-        return {"x": z["x"] + m, "y": z["y"] + m,
-                "width": max(0, z["width"] - 2 * m), "height": max(0, z["height"] - 2 * m)}
+        mx = self.cfg["bullet_radius"] + 1
+        my = mx + self.cfg["hitbox_half_height"]
+        return {"x": z["x"] + mx, "y": z["y"] + my,
+                "width": max(0, z["width"] - 2 * mx), "height": max(0, z["height"] - 2 * my)}
 
     # -------------------------------------------------------------------- tick
     def tick(self, dt: float, now: float | None = None) -> None:
@@ -294,6 +297,7 @@ class Game:
     def _move_bullets(self, dt: float, now: float) -> None:
         br = self.cfg["bullet_radius"]
         hit_r = self.cfg["player_radius"] + br
+        half_h = self.cfg["hitbox_half_height"]
         targets = [p for p in self.active_players() if p.alive]
         survivors = []
         for b in self.bullets:
@@ -315,7 +319,8 @@ class Game:
             for p in targets:
                 if p.team == b.team:
                     continue  # friendly fire disabled: bullets pass through teammates
-                t = collision.segment_circle_hit(b.x, b.y, x1, y1, p.x, p.y, hit_r)
+                # players are drawn standing upright: hit a capsule from head to feet
+                t = collision.segment_capsule_hit(b.x, b.y, x1, y1, p.x, p.y, half_h, hit_r)
                 if t is not None and (first_t is None or t < first_t):
                     first_t, victim = t, p
             if first_t is not None:
