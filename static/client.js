@@ -5,7 +5,9 @@
   const SESSION_KEY = "lanshooter-session";
 
   let ws = null;
-  let hello = null;          // {config, map, teams} sent by the server on connect
+  let hello = null;          // {config, maps, teams} sent by the server on connect
+  let mapId = null;          // map currently loaded into the renderer
+  let previewKey = null;     // what the lobby preview currently shows
   let me = null;             // {id, name, token} once joined
   let waitingJoin = null;    // {name, reason} when the join was refused but can be retried
   let lastJoinAttempt = 0;
@@ -57,7 +59,8 @@
     switch (msg.type) {
       case "hello": {
         hello = msg;
-        Render.init($("canvas"), msg.map, msg.config, msg.teams);
+        mapId = previewKey = null;
+        Render.init($("canvas"), msg.config, msg.teams);
         buildTeamButtons();
         const s = loadSession();
         if (s && s.name) sendJoin(s.name); // refresh / reconnect: rejoin automatically
@@ -99,8 +102,12 @@
   }
 
   function onState() {
-    // Refused earlier (match running / server full)? Retry when it may succeed.
-    if (!me && waitingJoin && snap.game_state !== "RUNNING" && performance.now() - lastJoinAttempt > 1500) {
+    if (snap.map_id !== mapId && hello.maps[snap.map_id]) {
+      mapId = snap.map_id;
+      Render.setMap(hello.maps[mapId]);
+    }
+    // Refused earlier (server full)? Retry every couple of seconds.
+    if (!me && waitingJoin && performance.now() - lastJoinAttempt > 2000) {
       sendJoin(waitingJoin.name);
     }
     if (me && !myPlayer()) {
@@ -124,7 +131,13 @@
     if (id === currentScreen) return;
     currentScreen = id;
     for (const s of document.querySelectorAll(".screen")) s.classList.toggle("hidden", s.id !== id);
-    if (id === "screen-game") Render.resize();
+    if (id === "screen-game") {
+      Render.resize();
+      // A focused (now hidden) input would swallow WASD; give focus back to the page.
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    } else {
+      releaseInput();
+    }
   }
 
   function fmtTime(sec) {
@@ -142,7 +155,7 @@
     if (!hello) return;
     if (!me) {
       if (waitingJoin) {
-        $("waiting-text").textContent = waitingJoin.reason + " You'll join automatically when possible.";
+        $("waiting-text").textContent = waitingJoin.reason + " You'll join automatically when a slot frees up.";
         show("screen-waiting");
       } else {
         show("screen-join");
@@ -152,16 +165,11 @@
     if (!snap) return;
     const p = myPlayer();
     if (!p) return;
-    if (snap.game_state === "LOBBY") {
+    if (snap.game_state === "LOBBY" || !p.in_match) {
+      // Lobby, or not part of the current match: pick a team (mid-match that
+      // drops you straight in) or just wait here for the next one.
       updateLobby(p);
       show("screen-lobby");
-    } else if (snap.game_state === "RUNNING" && !p.in_match) {
-      $("waiting-text").textContent = "A match started before you picked a team. You'll be able to join the next one.";
-      show("screen-waiting");
-    } else if (snap.game_state === "ENDED" && !p.in_match) {
-      updateLobby(p);
-      show("screen-lobby");
-      $("lobby-status").textContent = "The last match just ended. Pick a team for the next one!";
     } else {
       updateHud(p);
       show("screen-game");
@@ -196,9 +204,27 @@
       b.querySelector(".team-members").textContent = snap.players
         .filter((q) => q.team === t.id).map((q) => q.name).join(", ");
     }
-    $("lobby-status").textContent = p.team
-      ? "Waiting for the admin to start the game…"
-      : "Pick a team to play in the next match.";
+    let status;
+    if (snap.game_state === "RUNNING") {
+      status = `A match is in progress (${fmtTime(liveTimeRemaining())} left). ` +
+        "Pick a team to jump in now, or stay here to wait for the next match.";
+    } else if (snap.game_state === "ENDED") {
+      status = "The last match just ended. Pick a team for the next one!";
+    } else {
+      status = p.team ? "Waiting for the admin to start the game…" : "Pick a team to play in the next match.";
+    }
+    $("lobby-status").textContent = status;
+    updatePreview(p);
+  }
+
+  function updatePreview(p) {
+    const m = hello.maps[snap.map_id];
+    if (!m) return;
+    const key = `${m.id}|${p.team}|${$("preview-canvas").clientWidth}`;
+    if (key === previewKey) return;
+    $("preview-name").textContent = m.name + (p.team ? " — your spawn is highlighted" : "");
+    // Only remember the key once the image has loaded, so it's redrawn then.
+    previewKey = Render.drawPreview($("preview-canvas"), m, p.team) ? key : null;
   }
 
   // ------------------------------------------------------------ HUD
@@ -214,8 +240,14 @@
       scores.appendChild(s);
     }
     const max = hello.config.player_health;
-    const hp = Math.max(0, p.health || 0);
-    $("hud-health").textContent = "HP: " + "♥ ".repeat(hp) + "♡ ".repeat(max - hp);
+    const hp = p.alive ? Math.max(0, p.health || 0) : 0;
+    const hearts = $("hud-hearts");
+    if (hearts.dataset.hp !== `${hp}/${max}`) {
+      hearts.dataset.hp = `${hp}/${max}`;
+      hearts.innerHTML = "";
+      for (let i = 0; i < max; i++) hearts.append(el("span", "♥", { className: i < hp ? "heart" : "heart lost" }));
+      $("hud-health").classList.toggle("low", p.alive && hp === 1);
+    }
     $("hud-kills").textContent = `Kills: ${p.kills}   Deaths: ${p.deaths}`;
 
     const dead = snap.game_state === "RUNNING" && !p.alive;
@@ -312,16 +344,32 @@
     return true;
   }
 
+  // Release everything. Called whenever key-up / mouse-up events may never
+  // arrive (window loses focus, tab hidden, context menu, OS shortcuts), which
+  // is what used to leave players running in one direction on their own.
+  function releaseInput() {
+    firing = false;
+    if (!Object.values(keys).some(Boolean)) return;
+    for (const k of Object.keys(keys)) keys[k] = false;
+    send({ type: "move", keys });
+  }
+
   window.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT") return;
+    // With Cmd/Ctrl/Alt held the browser or OS may eat the matching key-up.
+    if (e.metaKey || e.ctrlKey || e.altKey) { releaseInput(); return; }
     if (setKey(e.code, true)) e.preventDefault();
   });
   window.addEventListener("keyup", (e) => setKey(e.code, false));
-  window.addEventListener("blur", () => {
-    for (const k of Object.keys(keys)) keys[k] = false;
-    send({ type: "move", keys });
-    firing = false;
-  });
+  window.addEventListener("blur", releaseInput);
+  window.addEventListener("pagehide", releaseInput);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) releaseInput(); });
+  document.addEventListener("contextmenu", releaseInput);
+
+  // Heartbeat: re-send the full key state a few times a second. The server
+  // releases keys it hasn't heard about for a second, so a lost message can
+  // never leave a key stuck down.
+  setInterval(() => { if (me) send({ type: "move", keys }); }, 250);
 
   const canvas = $("canvas");
   window.addEventListener("mousemove", (e) => { mouse = { x: e.clientX, y: e.clientY }; });
@@ -390,13 +438,11 @@
     }
 
     $("hud-timer").textContent = fmtTime(liveTimeRemaining());
-    $("waiting-timer").textContent = fmtTime(liveTimeRemaining());
     Render.draw({ players, bullets }, me && me.id, now);
   }
 
+  window.addEventListener("resize", () => { previewKey = null; });
+
   connect();
   requestAnimationFrame(frame);
-  setInterval(() => { // keep the waiting-screen timer ticking too
-    if (snap && !$("screen-waiting").classList.contains("hidden")) $("waiting-timer").textContent = fmtTime(liveTimeRemaining());
-  }, 250);
 })();
