@@ -20,12 +20,11 @@
     </div>
   </section>
 
-  <!-- Waiting (match in progress / not part of it) -->
+  <!-- Waiting (server full) -->
   <section id="screen-waiting" class="screen panel-screen hidden">
     <div class="panel">
-      <h1>MATCH IN PROGRESS</h1>
-      <p id="waiting-text">A match is currently being played.<br>You'll join automatically when it's over.</p>
-      <p class="muted">Time remaining: <span id="waiting-timer">--:--</span></p>
+      <h1>PLEASE WAIT</h1>
+      <p id="waiting-text">The server is full. You'll join automatically when a slot frees up.</p>
     </div>
   </section>
 
@@ -34,30 +33,35 @@
     <div class="panel wide">
       <h1>CHOOSE YOUR TEAM</h1>
       <p class="muted">Playing as <b id="lobby-name"></b></p>
+      <p id="lobby-status" class="lobby-status">Waiting for the admin to start the game…</p>
       <div id="team-buttons" class="team-buttons"></div>
       <p id="lobby-error" class="error"></p>
-      <p id="lobby-status" class="muted">Waiting for the admin to start the game…</p>
+      <div class="map-preview">
+        <div class="muted">Map: <b id="preview-name"></b></div>
+        <canvas id="preview-canvas"></canvas>
+      </div>
+      <p class="muted controls-hint">Move: <b>W A S D</b> or <b>arrow keys</b> · Aim: <b>mouse</b> · Shoot: <b>left click</b></p>
     </div>
   </section>
 
   <!-- Game -->
   <section id="screen-game" class="screen hidden">
-    <div id="hud-top" class="hud">
-      <div id="hud-scores"></div>
-      <div id="hud-timer">00:00</div>
-    </div>
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
+      <div id="hud-top" class="hud">
+        <div id="hud-scores"></div>
+        <div id="hud-timer">00:00</div>
+      </div>
       <div id="kill-feed"></div>
       <div id="death-overlay" class="overlay hidden">
         <h2>YOU DIED</h2>
         <p>Respawning in <span id="respawn-count">3</span>…</p>
       </div>
+      <div id="hud-bottom" class="hud">
+        <div id="hud-health"><span class="hud-label">LIVES</span><span id="hud-hearts"></span></div>
+        <div id="hud-kills"></div>
+      </div>
       <div id="results-overlay" class="overlay results hidden"></div>
-    </div>
-    <div id="hud-bottom" class="hud">
-      <div id="hud-health"></div>
-      <div id="hud-kills"></div>
     </div>
   </section>
 

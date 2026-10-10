@@ -68,31 +68,22 @@ input {
 .team-btn .team-count { margin: 4px 0 10px; color: #aab; }
 .team-btn .team-members { font-size: 0.85rem; color: #ccd; min-height: 1.2em; }
 .team-btn.selected { background: #30364a; }
+.lobby-status { color: #d6d9e2; font-size: 1.05rem; }
+
+.map-preview { margin-top: 18px; }
+.map-preview canvas { display: block; width: 100%; margin-top: 8px; border-radius: 8px; border: 1px solid #2c303b; background: #1a1d24; }
+.controls-hint { font-size: 0.9rem; }
 
 /* ---------- game ---------- */
+/* The map fills the whole window; the HUD floats over it. */
 #screen-game {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-}
-.hud {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 16px;
-  font-weight: 700;
-  font-size: 1.1rem;
   background: #0c0d11;
-  gap: 16px;
 }
-#hud-scores { display: flex; gap: 20px; flex-wrap: wrap; }
-#hud-timer { font-variant-numeric: tabular-nums; font-size: 1.3rem; }
-#hud-health { letter-spacing: 3px; }
-
 #canvas-wrap {
-  position: relative;
-  flex: 1;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -100,10 +91,39 @@ input {
 }
 #canvas { display: block; cursor: crosshair; }
 
+.hud {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 16px;
+  font-weight: 700;
+  font-size: 1.1rem;
+  gap: 16px;
+  pointer-events: none;
+  text-shadow: 0 1px 3px #000;
+  z-index: 1;
+}
+#hud-top { top: 0; background: linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0)); padding-bottom: 14px; }
+#hud-bottom { bottom: 0; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.65)); padding-top: 14px; }
+#hud-scores { display: flex; gap: 20px; flex-wrap: wrap; font-size: 1.3rem; }
+#hud-timer { font-variant-numeric: tabular-nums; font-size: 1.5rem; }
+
+#hud-health { display: flex; align-items: center; gap: 10px; }
+.hud-label { font-size: 0.85rem; letter-spacing: 2px; color: #c9ccd6; }
+#hud-hearts { display: flex; gap: 6px; }
+.heart { font-size: 2.2rem; line-height: 1; color: #ff4d5e; text-shadow: 0 0 6px rgba(255, 77, 94, 0.6), 0 1px 2px #000; }
+.heart.lost { color: rgba(255, 255, 255, 0.18); text-shadow: 0 1px 2px #000; }
+#hud-health.low .heart:not(.lost) { animation: pulse 0.6s ease-in-out infinite alternate; }
+@keyframes pulse { to { transform: scale(1.2); } }
+
 #kill-feed {
   position: absolute;
-  top: 8px;
+  top: 48px;
   right: 12px;
+  z-index: 1;
   font-size: 0.85rem;
   text-align: right;
   pointer-events: none;
@@ -118,6 +138,7 @@ input {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.55);
+  z-index: 2;
   pointer-events: none;
   text-align: center;
 }

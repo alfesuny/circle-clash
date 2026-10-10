@@ -20,6 +20,7 @@ class Player:
     y: float = 0.0
     angle: float = 0.0
     keys: dict = field(default_factory=lambda: {k: False for k in MOVE_KEYS})
+    last_input_at: float = float("-inf")  # when keys were last received
 
     health: int = 0
     alive: bool = False

@@ -8,12 +8,14 @@ rules can be tested deterministically.
 
 import math
 import random
+import secrets
 import time
 import uuid
 
 from . import collision
-from .config import GAME_CONFIG, MAP, TEAMS, max_total_players
+from .config import GAME_CONFIG, MAPS_DIR, TEAMS
 from .entities import MOVE_KEYS, Bullet, Player
+from .maps import load_maps
 
 LOBBY, RUNNING, ENDED = "LOBBY", "RUNNING", "ENDED"
 
@@ -28,17 +30,15 @@ def _clean_name(raw) -> str:
 
 
 class Game:
-    def __init__(self, config: dict = GAME_CONFIG, teams: list = TEAMS, game_map: dict = MAP):
+    def __init__(self, config: dict = GAME_CONFIG, teams: list = TEAMS, maps: dict | None = None):
         self.cfg = config
         self.teams = teams
         self.team_ids = [t["id"] for t in teams]
-        self.map = game_map
-        # What blocks each team's movement: all walls plus every *other* team's
-        # spawn zone (players can't enter enemy spawns).
-        self.blockers = {
-            tid: game_map["walls"] + [z for zt, z in game_map["spawn_zones"].items() if zt != tid]
-            for tid in self.team_ids
-        }
+        self.maps = load_maps(MAPS_DIR, teams) if maps is None else maps
+        if not self.maps:
+            raise RuntimeError(f"No valid maps found in {MAPS_DIR}")
+        default = config.get("default_map")
+        self._use_map(default if default in self.maps else next(iter(self.maps)))
         self.state = LOBBY
         self.players: dict[str, Player] = {}
         self.bullets: list[Bullet] = []
@@ -55,6 +55,19 @@ class Game:
     # ------------------------------------------------------------------ helpers
     def now(self) -> float:
         return time.monotonic()
+
+    def _use_map(self, map_id: str) -> None:
+        self.map_id = map_id
+        self.map = self.maps[map_id]
+        # What blocks each team's movement: all walls plus every *other* team's
+        # spawn zone (players can't enter enemy spawns).
+        self.blockers = {
+            tid: self.map["walls"] + [z for zt, z in self.map["spawn_zones"].items() if zt != tid]
+            for tid in self.team_ids
+        }
+
+    def max_total_players(self) -> int:
+        return self.cfg["max_players_per_team"] * len(self.teams)
 
     def team_count(self, team_id: str) -> int:
         return sum(1 for p in self.players.values() if p.team == team_id and p.connected)
@@ -82,20 +95,26 @@ class Game:
         name = _clean_name(name)
         if not name:
             raise GameError("Please enter a name.")
-        if self.state == RUNNING:
-            raise GameError("A match is in progress. Please wait for the next one.")
-        if sum(1 for p in self.players.values() if p.connected) >= max_total_players():
+        if sum(1 for p in self.players.values() if p.connected) >= self.max_total_players():
             raise GameError("The server is full.")
         player = Player(id=uuid.uuid4().hex[:8], name=name)
         self.players[player.id] = player
         return player
 
     def resume(self, player_id: str, token: str, now: float | None = None) -> Player:
-        """Reattach a disconnected player (e.g. after a browser refresh)."""
+        """Reattach a player after a browser refresh or a dropped connection.
+
+        The player may still be marked connected: after a Wi-Fi blip the
+        browser reconnects before the server notices the old socket is dead.
+        The token proves it's the same browser, so it takes over the player
+        (the networking layer closes the stale socket)."""
         now = self.now() if now is None else now
         p = self.players.get(player_id)
-        if p is None or p.connected or p.resume_token != token:
+        if p is None or not secrets.compare_digest(p.resume_token, str(token)):
             raise GameError("Session expired.")
+        p.keys = {k: False for k in MOVE_KEYS}
+        if p.connected:
+            return p  # live takeover: keep position/health as they are
         p.connected = True
         if self.state == RUNNING and p.in_match:
             p.respawn_at = now + self.cfg["respawn_delay"]
@@ -114,19 +133,24 @@ class Game:
         p.respawn_at = None
         p.keys = {k: False for k in MOVE_KEYS}
 
-    def choose_team(self, player_id: str, team_id) -> None:
+    def choose_team(self, player_id: str, team_id, now: float | None = None) -> None:
+        """Pick/change team. In LOBBY/ENDED anyone may; during a match only
+        players not yet in it may, and doing so drops them straight in."""
+        now = self.now() if now is None else now
         p = self.players.get(player_id)
         if p is None:
             raise GameError("Unknown player.")
-        if self.state == RUNNING:
+        if self.state == RUNNING and p.in_match:
             raise GameError("Teams are locked during a match.")
         if team_id not in self.team_ids:
             raise GameError("Unknown team.")
-        if p.team == team_id:
-            return
-        if self.team_count(team_id) >= self.cfg["max_players_per_team"]:
+        if p.team != team_id and self.team_count(team_id) >= self.cfg["max_players_per_team"]:
             raise GameError("That team is full.")
         p.team = team_id
+        if self.state == RUNNING:
+            p.reset_match_stats()
+            p.in_match = True
+            self._spawn(p, now)
 
     # ------------------------------------------------------------- admin/match
     def start(self, duration=None, now: float | None = None) -> None:
@@ -149,6 +173,13 @@ class Game:
                 self._spawn(p, now)
         self.state = RUNNING
         self.ends_at = now + self.duration
+
+    def set_map(self, map_id) -> None:
+        if self.state == RUNNING:
+            raise GameError("The map can't be changed during a match.")
+        if map_id not in self.maps:
+            raise GameError("Unknown map.")
+        self._use_map(map_id)
 
     def set_duration(self, duration) -> None:
         try:
@@ -184,11 +215,12 @@ class Game:
             del self.players[pid]
 
     # ------------------------------------------------------------------- input
-    def set_keys(self, player_id: str, keys) -> None:
+    def set_keys(self, player_id: str, keys, now: float | None = None) -> None:
         p = self.players.get(player_id)
         if p is None or not isinstance(keys, dict):
             return
         p.keys = {k: keys.get(k) is True for k in MOVE_KEYS}
+        p.last_input_at = self.now() if now is None else now
 
     def set_aim(self, player_id: str, angle) -> None:
         p = self.players.get(player_id)
@@ -233,17 +265,22 @@ class Game:
         now = self.now() if now is None else now
         if self.state != RUNNING:
             return
-        self._move_players(dt)
+        self._move_players(dt, now)
         self._move_bullets(dt, now)
         self._process_respawns(now)
         if now >= self.ends_at:
             self.end(now)
 
-    def _move_players(self, dt: float) -> None:
+    def _move_players(self, dt: float, now: float) -> None:
         r, speed = self.cfg["player_radius"], self.cfg["player_speed"]
         for p in self.active_players():
             if not p.alive:
                 continue
+            # Clients re-send their key state several times a second. If that
+            # stops (frozen tab, dead connection, lost key-up) release the keys
+            # instead of letting the player run on forever.
+            if now - p.last_input_at > self.cfg["input_timeout"]:
+                p.keys = {k: False for k in MOVE_KEYS}
             dx = (1 if p.keys["d"] else 0) - (1 if p.keys["a"] else 0)
             dy = (1 if p.keys["s"] else 0) - (1 if p.keys["w"] else 0)
             if dx == 0 and dy == 0:
@@ -390,6 +427,7 @@ class Game:
         return {
             "type": "state",
             "game_state": self.state,
+            "map_id": self.map_id,
             "time_remaining": round(self.time_remaining(now), 1),
             "duration": self.duration,
             "teams": self._team_rows(),

@@ -90,6 +90,7 @@
       $("minutes").value = Math.floor(s.duration / 60);
       $("seconds").value = s.duration % 60;
     }
+    renderMaps(s);
     const running = s.game_state === "RUNNING";
     $("btn-start").disabled = running;
     $("btn-start").textContent = s.game_state === "ENDED" ? "START NEW GAME" : "START GAME";
@@ -97,6 +98,22 @@
     $("btn-lobby").disabled = s.game_state !== "ENDED";
     $("minutes").disabled = $("seconds").disabled = running;
   }
+
+  function renderMaps(s) {
+    const sel = $("map-select");
+    const ids = s.maps.map((m) => m.id).join("|");
+    if (sel.dataset.ids !== ids) {  // rebuild options only when the map list changes
+      sel.dataset.ids = ids;
+      sel.innerHTML = "";
+      for (const m of s.maps) sel.append(new Option(m.name, m.id));
+    }
+    sel.value = s.map_id;
+    sel.disabled = s.game_state === "RUNNING";
+    const m = s.maps.find((x) => x.id === s.map_id);
+    if (m && $("map-thumb").getAttribute("src") !== m.image_url) $("map-thumb").src = m.image_url;
+  }
+
+  $("map-select").addEventListener("change", (e) => action("/api/admin/map", { map_id: e.target.value }));
 
   async function refresh() {
     if (!token) return;

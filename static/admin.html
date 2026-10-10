@@ -17,6 +17,8 @@
     input[type=number] { width: 80px; }
     .btn-start { background: #2e9e5b; } .btn-end { background: #c0392b; }
     .teams td:first-child { font-weight: 800; }
+    select { font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid #3b4252; background: #1c1f27; color: #fff; }
+    .map-thumb { width: 320px; max-width: 100%; aspect-ratio: 16 / 9; object-fit: fill; border-radius: 8px; border: 1px solid #2c303b; }
   </style>
 </head>
 <body>
@@ -44,6 +46,15 @@
       <h3 style="margin-top:0">Teams</h3>
       <table class="teams"><tbody id="teams"></tbody></table>
       <p>Total: <b id="total"></b></p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Map</h3>
+      <div class="row" style="align-items:flex-start">
+        <select id="map-select"></select>
+        <img id="map-thumb" alt="Selected map" class="map-thumb">
+      </div>
+      <p class="muted">Players see a preview of the selected map in the lobby. The map can't be changed during a match.</p>
     </div>
 
     <div class="card">
