@@ -1,11 +1,13 @@
-// Canvas rendering. Everything is drawn in world coordinates and scaled to
-// fit the window, so game logic never depends on screen size.
+// Canvas rendering. Everything is drawn in world coordinates through a camera
+// that follows the local player, zoomed so the screen's shorter side shows
+// camera_view_span world units. Game logic never depends on screen size.
 const Render = (() => {
   const DEBUG = new URLSearchParams(location.search).has("debug"); // ?debug=1 shows collision rects
   let canvas, ctx, map = null, cfg;
   let teamColor = {};
   let scale = 1, dpr = 1;
-  let bg = null;              // offscreen canvas: map image + spawn zones, pre-scaled to the screen
+  let viewW = 0, viewH = 0;   // canvas size in CSS pixels
+  const cam = { x: 0, y: 0 }; // world point at the centre of the screen
   const images = {};          // image url -> HTMLImageElement
 
   function init(canvasEl, config, teams) {
@@ -18,7 +20,6 @@ const Render = (() => {
   function image(url) {
     if (!images[url]) {
       const img = new Image();
-      img.onload = () => { if (map && map.image_url === url) buildBackground(); };
       img.src = url;
       images[url] = img;
     }
@@ -36,26 +37,42 @@ const Render = (() => {
     resize();
   }
 
-  // Fit the world into the available area, keeping its aspect ratio.
+  // The canvas fills the window. The shorter side shows camera_view_span
+  // world units and the longer one at most max_view_aspect times that (a very
+  // wide window zooms in rather than seeing further). The server works out
+  // the same view (Game.view_rect) to decide what to send.
   function resize() {
     if (!canvas || !map) return;
     const wrap = canvas.parentElement.getBoundingClientRect();
     if (wrap.width === 0 || wrap.height === 0) return;
-    scale = Math.min(wrap.width / map.width, wrap.height / map.height);
-    const w = Math.floor(map.width * scale);
-    const h = Math.floor(map.height * scale);
+    viewW = Math.floor(wrap.width);
+    viewH = Math.floor(wrap.height);
     dpr = window.devicePixelRatio || 1;
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
-    scale = w / map.width;
-    buildBackground();
+    canvas.style.width = viewW + "px";
+    canvas.style.height = viewH + "px";
+    canvas.width = Math.floor(viewW * dpr);
+    canvas.height = Math.floor(viewH * dpr);
+    const span = cfg.camera_view_span;
+    scale = Math.max(Math.min(viewW, viewH) / span, Math.max(viewW, viewH) / (span * cfg.max_view_aspect));
+    setCamera(cam.x, cam.y);
+  }
+
+  // Centre the view on (x, y) without showing past the world's edges (on an
+  // axis where the whole world fits on screen, centre the world instead).
+  function setCamera(x, y) {
+    if (!map || !viewW) return;
+    const halfW = viewW / 2 / scale, halfH = viewH / 2 / scale;
+    cam.x = map.width <= 2 * halfW ? map.width / 2 : Math.min(Math.max(x, halfW), map.width - halfW);
+    cam.y = map.height <= 2 * halfH ? map.height / 2 : Math.min(Math.max(y, halfH), map.height - halfH);
+  }
+
+  function worldTransform(c) {
+    c.setTransform(scale * dpr, 0, 0, scale * dpr, (viewW / 2 - cam.x * scale) * dpr, (viewH / 2 - cam.y * scale) * dpr);
   }
 
   function toWorld(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
-    return { x: (clientX - r.left) / scale, y: (clientY - r.top) / scale };
+    return { x: (clientX - r.left - viewW / 2) / scale + cam.x, y: (clientY - r.top - viewH / 2) / scale + cam.y };
   }
 
   function hexToRgba(hex, a) {
@@ -64,14 +81,14 @@ const Render = (() => {
   }
 
   // Map art + spawn zones for map m, in world coordinates on context c.
-  function paintMap(c, m, highlightTeam) {
+  // line: spawn-zone outline width in world units.
+  function paintMap(c, m, highlightTeam, line = Math.max(2, m.width / 400)) {
     if (imageReady(m)) {
       c.drawImage(image(m.image_url), 0, 0, m.width, m.height); // stretched to the world size
     } else {
       c.fillStyle = "#1a1d24";
       c.fillRect(0, 0, m.width, m.height);
     }
-    const line = Math.max(2, m.width / 400);
     for (const [team, z] of Object.entries(m.spawn_zones)) {
       const color = teamColor[team] || "#888888";
       const mine = team === highlightTeam;
@@ -87,16 +104,6 @@ const Render = (() => {
       c.fillStyle = DEBUG ? "rgba(255,0,255,0.45)" : "#4b5263";
       for (const w of m.walls) c.fillRect(w.x, w.y, w.width, w.height);
     }
-  }
-
-  function buildBackground() {
-    if (!canvas || !map) return;
-    bg = bg || document.createElement("canvas");
-    bg.width = canvas.width;
-    bg.height = canvas.height;
-    const b = bg.getContext("2d");
-    b.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
-    paintMap(b, map, null);
   }
 
   // Small preview of map m into a <canvas>, highlighting team's spawn.
@@ -314,11 +321,15 @@ const Render = (() => {
     ctx.fillText(p.name, p.x, top - 15);
   }
 
+  // The server only sends the players and bullets that are on this player's
+  // screen (the camera follows them; see setCamera).
   function draw(view, meId, now) {
-    if (!ctx || !map) return;
+    if (!ctx || !map || !viewW) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (bg) ctx.drawImage(bg, 0, 0);
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ctx.fillStyle = "#0c0d11";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    worldTransform(ctx);
+    paintMap(ctx, map, null, 3 / scale);
     drawBullets(view.bullets);
     let me = null;
     for (const p of view.players) {
@@ -329,5 +340,5 @@ const Render = (() => {
     if (me) drawPlayer(me, true, now); // own player on top
   }
 
-  return { init, setMap, resize, toWorld, draw, drawPreview };
+  return { init, setMap, resize, setCamera, toWorld, draw, drawPreview };
 })();

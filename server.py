@@ -11,8 +11,11 @@ import queue
 import secrets
 import socket
 import sys
+import threading
 import time
+import traceback
 from collections import deque
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
@@ -35,10 +38,11 @@ game = Game()
 # Config the client needs for rendering/prediction (sent once on connect).
 CLIENT_CONFIG = {k: GAME_CONFIG[k] for k in (
     "player_radius", "player_health", "fire_cooldown", "tick_rate",
-    "max_players_per_team", "max_name_length")}
+    "max_players_per_team", "max_name_length", "camera_view_span", "max_view_aspect")}
 
 SEND_TIMEOUT = 5.0     # a socket that can't take a message for this long is dropped
 STALL_WARNING = 0.25   # log when a game-loop iteration is this late (seconds)
+STALL_TRACE = 1.0      # the watchdog logs where the game loop is stuck after this long
 
 
 # --------------------------------------------------------------------- logging
@@ -153,9 +157,11 @@ class Clients:
     def __init__(self):
         self.conns: set[Conn] = set()
 
-    def broadcast_state(self, text: str) -> None:
+    def broadcast_state(self, text_for: Callable[[str | None], str]) -> None:
+        """Hand every connection the state text for its player (text_for(None)
+        for sockets that haven't joined)."""
         for c in self.conns:
-            c.push_state(text)
+            c.push_state(text_for(c.player_id))
 
     def owning(self, player_id: str) -> list[Conn]:
         return [c for c in self.conns if c.player_id == player_id]
@@ -164,20 +170,63 @@ class Clients:
 clients = Clients()
 
 
+def state_texts(snap: dict) -> Callable[[str | None], str]:
+    """Per-player JSON of one tick's snapshot, filtered to what that player can
+    see, encoded once per player even if they have several sockets."""
+    cache: dict[str | None, str] = {}
+
+    def text_for(player_id: str | None) -> str:
+        if player_id not in cache:
+            cache[player_id] = json.dumps(game.view_for(snap, player_id), separators=(",", ":"))
+        return cache[player_id]
+
+    return text_for
+
+
+# Updated by every game-loop iteration; read by the watchdog thread.
+loop_heartbeat = {"at": 0.0, "thread": None}
+
+
+def watchdog() -> None:
+    """Background thread for diagnosing freezes. If the game loop stops
+    ticking, log the stack of the thread running it (whatever is blocking the
+    event loop). If this thread itself was paused, the whole process was
+    frozen from outside: the machine was overloaded, asleep, or the console
+    blocked it."""
+    last, reported = time.monotonic(), False
+    while True:
+        time.sleep(0.25)
+        now = time.monotonic()
+        if now - last > STALL_TRACE:
+            log.warning("The whole server process was paused for %.1f s (by the OS, not the game: "
+                        "is the computer overloaded or going to sleep?)", now - last)
+        last = now
+        stuck = now - loop_heartbeat["at"]
+        if loop_heartbeat["thread"] is None or stuck < STALL_TRACE:
+            reported = False
+        elif not reported:
+            reported = True
+            frame = sys._current_frames().get(loop_heartbeat["thread"])
+            where = "".join(traceback.format_stack(frame)) if frame else "(unknown)\n"
+            log.warning("Game loop stuck for %.1f s; it is busy in:\n%s", stuck, where)
+
+
 async def game_loop() -> None:
-    """Fixed-rate tick: simulate, then hand one shared snapshot to every client.
-    Nothing in here awaits a socket, so no client can stall the game."""
+    """Fixed-rate tick: simulate, then hand every client its view of the
+    snapshot. Nothing in here awaits a socket, so no client can stall the game."""
     interval = 1.0 / GAME_CONFIG["tick_rate"]
     last = time.monotonic()
     deadline = last
+    loop_heartbeat["thread"] = threading.get_ident()
     while True:
         now = time.monotonic()
+        loop_heartbeat["at"] = now
         if now - last > interval + STALL_WARNING:
             log.warning("Game loop stalled for %.0f ms", (now - last - interval) * 1000)
         try:
             game.tick(min(now - last, 0.1), now)  # cap dt so a stall can't teleport players
             if clients.conns:
-                clients.broadcast_state(json.dumps(game.snapshot(now), separators=(",", ":")))
+                clients.broadcast_state(state_texts(game.snapshot(now)))
         except Exception:
             log.exception("Error in game loop")
         last = now
@@ -206,7 +255,8 @@ def lan_addresses() -> list[str]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     setup_logging(to_file=False)  # no-op if __main__ already set it up (with a file)
-    task = asyncio.create_task(game_loop())
+    # The banner first: lan_addresses() does a DNS lookup that can take
+    # seconds on Windows, and must not run while the game loop is ticking.
     print("\n" + "=" * 56)
     print("  LAN SHOOTER is running")
     for ip in lan_addresses() or ["<your-local-ip>"]:
@@ -215,6 +265,7 @@ async def lifespan(_app: FastAPI):
     print(f"  Admin password:   {ADMIN_PASSWORD}")
     print(f"  Maps:             {', '.join(game.maps)}")
     print("=" * 56 + "\n", flush=True)
+    task = asyncio.create_task(game_loop())
     yield
     task.cancel()
 
@@ -308,6 +359,8 @@ def handle_message(conn: Conn, msg: dict) -> None:
             game.set_keys(pid, msg.get("keys"))
         elif kind == "aim":
             game.set_aim(pid, msg.get("angle"))
+        elif kind == "view":
+            game.set_view(pid, msg.get("aspect"))
         elif kind == "shoot":
             game.shoot(pid, msg.get("angle"))
     except GameError as e:
@@ -442,6 +495,7 @@ if __name__ == "__main__":
 
     disable_console_quickedit()
     setup_logging(to_file=True)
+    threading.Thread(target=watchdog, name="watchdog", daemon=True).start()
     # Pings detect vanished clients (closed laptop, dropped Wi-Fi) within seconds.
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning",
                 ws_ping_interval=5, ws_ping_timeout=10)

@@ -48,6 +48,11 @@
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }
 
+  // The server sends only what's on our screen, so it needs the window shape.
+  function sendView() {
+    if (me && innerWidth > 0 && innerHeight > 0) send({ type: "view", aspect: innerWidth / innerHeight });
+  }
+
   function sendJoin(name) {
     const s = loadSession();
     const resume = s && s.id && s.token ? { id: s.id, token: s.token } : null;
@@ -70,6 +75,7 @@
       case "welcome":
         me = { id: msg.player_id, name: msg.name, token: msg.resume_token };
         waitingJoin = null;
+        sendView();
         saveSession({ name: msg.name, id: msg.player_id, token: msg.resume_token });
         $("lobby-name").textContent = msg.name;
         updateScreens();
@@ -381,7 +387,7 @@
   });
   window.addEventListener("mouseup", (e) => { if (e.button === 0) firing = false; });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  window.addEventListener("resize", () => Render.resize());
+  window.addEventListener("resize", () => { Render.resize(); sendView(); });
 
   // Holding the mouse button keeps firing at the cooldown rate; the server
   // enforces the real cooldown, the client just avoids spamming it.
@@ -423,8 +429,11 @@
     const players = lerpList(prevSnap && prevSnap.players, snap.players, alpha, 80);
     const bullets = lerpList(prevSnap && prevSnap.bullets, snap.bullets, alpha, 80);
 
-    // Own aim is computed locally so the barrel follows the mouse instantly.
+    // The camera follows us; set it before turning the mouse into an aim.
     const mine = me && players.find((p) => p.id === me.id);
+    if (mine && mine.x !== undefined) Render.setCamera(mine.x, mine.y);
+
+    // Own aim is computed locally so the barrel follows the mouse instantly.
     if (mine && mine.alive && mouse && snap.game_state === "RUNNING") {
       const m = Render.toWorld(mouse.x, mouse.y);
       aimAngle = Math.atan2(m.y - mine.y, m.x - mine.x);

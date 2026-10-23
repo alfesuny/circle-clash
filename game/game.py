@@ -19,6 +19,10 @@ from .maps import load_maps
 
 LOBBY, RUNNING, ENDED = "LOBBY", "RUNNING", "ENDED"
 
+# Snapshot fields that give away where a player is or how they're doing;
+# stripped from the rows of players the viewer can't see.
+POSITION_FIELDS = ("x", "y", "angle", "health", "protected", "invulnerable", "respawn_in")
+
 
 class GameError(Exception):
     """A request that the rules refuse; the message is shown to the player/admin."""
@@ -65,7 +69,6 @@ class Game:
             tid: self.map["walls"] + [z for zt, z in self.map["spawn_zones"].items() if zt != tid]
             for tid in self.team_ids
         }
-
     def max_total_players(self) -> int:
         return self.cfg["max_players_per_team"] * len(self.teams)
 
@@ -221,6 +224,15 @@ class Game:
             return
         p.keys = {k: keys.get(k) is True for k in MOVE_KEYS}
         p.last_input_at = self.now() if now is None else now
+
+    def set_view(self, player_id: str, aspect) -> None:
+        """The player's window shape (width / height), which decides how much
+        of the world their screen shows. Limited to max_view_aspect either way."""
+        p = self.players.get(player_id)
+        if p is None or not isinstance(aspect, (int, float)) or not math.isfinite(aspect) or aspect <= 0:
+            return
+        top = self.cfg["max_view_aspect"]
+        p.view_aspect = float(collision.clamp(aspect, 1 / top, top))
 
     def set_aim(self, player_id: str, angle) -> None:
         p = self.players.get(player_id)
@@ -441,3 +453,44 @@ class Game:
             "kill_feed": self.kill_feed,
             "results": self.results,
         }
+
+    def view_rect(self, p: Player) -> tuple[float, float, float, float]:
+        """(left, top, right, bottom) of the world p's screen shows, widened by
+        view_margin. Same maths as the browser's camera (render.js resize and
+        setCamera): the shorter side shows camera_view_span units, the longer
+        one at most max_view_aspect times that, centred on p but kept inside
+        the world. Before the browser has reported its window shape, assume
+        the widest view either way so nothing on screen is ever missing."""
+        span, top = self.cfg["camera_view_span"], self.cfg["max_view_aspect"]
+        a = p.view_aspect
+        if a is None:
+            hw = hh = span / 2 * top
+        elif a >= 1:
+            hw, hh = span / 2 * a, span / 2
+        else:
+            hw, hh = span / 2, span / 2 / a
+        w, h = self.map["width"], self.map["height"]
+        cx = w / 2 if w <= 2 * hw else collision.clamp(p.x, hw, w - hw)
+        cy = h / 2 if h <= 2 * hh else collision.clamp(p.y, hh, h - hh)
+        m = self.cfg["view_margin"]
+        return cx - hw - m, cy - hh - m, cx + hw + m, cy + hh + m
+
+    def view_for(self, snap: dict, viewer_id: str | None) -> dict:
+        """snap as one player sees it: other players' positions (teammates
+        included) and bullets only if they're on that player's screen. A dead
+        player keeps seeing from where they died; anyone not in the match sees
+        no positions at all."""
+        viewer = self.players.get(viewer_id) if viewer_id is not None else None
+        sees = viewer is not None and viewer.in_match and viewer.connected
+        x0, y0, x1, y1 = self.view_rect(viewer) if sees else (0, 0, -1, -1)  # empty when not
+
+        def on_screen(x: float, y: float) -> bool:
+            return x0 <= x <= x1 and y0 <= y <= y1
+
+        players = []
+        for row in snap["players"]:
+            if "x" in row and row["id"] != viewer_id and not (row["alive"] and on_screen(row["x"], row["y"])):
+                row = {k: v for k, v in row.items() if k not in POSITION_FIELDS}
+            players.append(row)
+        bullets = [b for b in snap["bullets"] if on_screen(b["x"], b["y"])]
+        return {**snap, "players": players, "bullets": bullets}

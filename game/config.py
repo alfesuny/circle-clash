@@ -18,7 +18,7 @@ GAME_CONFIG = {
     "player_radius": 14,              # movement/collision circle (and hitbox width)
     "hitbox_half_height": 8,          # bullets hit a vertical capsule this much taller above
                                       # and below the circle: covers the standing figure head to feet
-    "player_speed": 180,              # units / second
+    "player_speed": 140,              # units / second
     "bullet_speed": 650,              # units / second
     "bullet_radius": 4,
     "bullet_lifetime": 2.0,           # seconds before an unobstructed bullet expires
@@ -31,6 +31,10 @@ GAME_CONFIG = {
     "max_name_length": 16,
     "kill_feed_size": 5,
     "default_map": "Galadriel",
+    "camera_view_span": 520,          # world units shown along the screen's shorter side (the zoom)
+    "max_view_aspect": 2.4,           # a wider/taller screen doesn't see further, it zooms in instead
+    "view_margin": 50,                # the server also sends what's just off-screen (a soldier's
+                                      # size), so nothing pops in at the screen's edges
 }
 
 # Admin password: set LAN_SHOOTER_ADMIN_PASSWORD to choose one, otherwise a

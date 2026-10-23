@@ -69,6 +69,20 @@ def test_join_team_start_and_play(client):
         r = client.post("/api/admin/start", json={"duration": 60}, headers=headers)
         assert r.status_code == 200, r.text
 
+        # each player gets their own view; a socket that never joined sees no one
+        a.send_json({"type": "view", "aspect": 1.5})
+        a.send_json({"type": "view", "aspect": "junk"})  # ignored
+        while True:
+            s = recv_type(a, "state")
+            if s["game_state"] == "RUNNING":
+                assert "x" in next(p for p in s["players"] if p["id"] == aid)
+                break
+        recv_type(a, "state")  # the view messages were handled before a later state
+        assert server.game.players[aid].view_aspect == 1.5
+        with client.websocket_connect("/ws") as spy:
+            s = recv_type(spy, "state")
+            assert s["game_state"] == "RUNNING" and all("x" not in p for p in s["players"])
+
         # late joiners get in and can jump into the running match
         with client.websocket_connect("/ws") as late:
             late.send_json({"type": "join", "name": "Late"})
@@ -159,7 +173,7 @@ def test_stalled_client_does_not_block_others(monkeypatch):
         clients.conns.update(conns)
         t0 = asyncio.get_running_loop().time()
         for i in range(30):
-            clients.broadcast_state(f"state-{i}")  # synchronous: can't wait on any socket
+            clients.broadcast_state(lambda pid, i=i: f"state-{i}")  # synchronous: can't wait on any socket
             await asyncio.sleep(0.01)
         assert asyncio.get_running_loop().time() - t0 < 1.0
         assert fast.sent[-1] == "state-29"  # the healthy client kept receiving

@@ -525,3 +525,127 @@ def test_resume_after_refresh():
     assert p is a and a.connected and a.team == "a"
     run(g, t, GAME_CONFIG["respawn_delay"] + 0.1)
     assert a.alive
+
+
+# ------------------------------------------------------------------ view
+# A small view on the 1000x700 test map so on/off-screen is easy to set up.
+VIEW_CFG = {**GAME_CONFIG, "camera_view_span": 200, "max_view_aspect": 2, "view_margin": 0}
+
+
+def view_game(*teams):
+    """Running game with VIEW_CFG and one player per team, spawn protection over."""
+    g = Game(config=VIEW_CFG, maps={"Test": TEST_MAP})
+    players = [g.join(f"p{i}") for i in range(len(teams))]
+    for p, team in zip(players, teams):
+        g.choose_team(p.id, team)
+    g.start(60, now=0)
+    return g, players, PROTECT + 1
+
+
+def seen_by(g, viewer_id, target):
+    """Whether viewer's snapshot includes target's position."""
+    row = next(p for p in g.view_for(g.snapshot(), viewer_id)["players"] if p["id"] == target.id)
+    return "x" in row
+
+
+def test_view_rect_follows_the_window_shape():
+    g, (a,), _ = view_game("a")
+    place(a, 500, 350)
+    assert g.view_rect(a) == (300, 150, 700, 550)   # shape not reported yet: widest either way
+    g.set_view(a.id, 2.0)
+    assert g.view_rect(a) == (300, 250, 700, 450)   # landscape: 200 tall, 400 wide
+    g.set_view(a.id, 0.5)
+    assert g.view_rect(a) == (400, 150, 600, 550)   # portrait
+    g.set_view(a.id, 9)
+    assert a.view_aspect == 2                       # ultra-wide sees no further
+    for junk in ("wide", float("nan"), float("inf"), 0, -1, None, [2]):
+        g.set_view(a.id, junk)
+    assert a.view_aspect == 2
+    place(a, 20, 690)                               # near a corner the camera stops at the edge
+    assert g.view_rect(a) == (0, 500, 400, 700)
+
+
+def test_real_config_view_is_span_tall_plus_margin():
+    g, a, b, t = running_duel()
+    g.set_view(a.id, 16 / 9)
+    x0, y0, x1, y1 = g.view_rect(a)
+    m, span = GAME_CONFIG["view_margin"], GAME_CONFIG["camera_view_span"]
+    assert y1 - y0 == pytest.approx(span + 2 * m)
+    assert x1 - x0 == pytest.approx(span * 16 / 9 + 2 * m)
+
+
+def test_only_what_is_on_screen_is_sent():
+    g, (a, b, c), t = view_game("a", "b", "a")
+    g.set_view(a.id, 2.0)
+    place(a, 500, 350)                              # screen: x 300-700, y 250-450
+    place(b, 690, 440)
+    assert seen_by(g, a.id, b)
+    place(b, 710, 350)
+    assert not seen_by(g, a.id, b)
+    place(c, 500, 460)                              # teammates too
+    assert not seen_by(g, a.id, c)
+    place(c, 500, 440)
+    assert seen_by(g, a.id, c)
+    row = next(p for p in g.view_for(g.snapshot(), a.id)["players"] if p["id"] == b.id)
+    assert row["name"] == "p1" and row["team"] == "b"  # still listed, just not where
+    assert "health" not in row and "angle" not in row
+
+
+def test_walls_do_not_hide_anything_on_screen():
+    g, (a, b), t = view_game("a", "b")
+    place(a, 440, 300)
+    place(b, 560, 300)  # the centre wall (x 485-515) is between them
+    assert seen_by(g, a.id, b) and seen_by(g, b.id, a)
+
+
+def test_margin_sends_what_is_just_off_screen():
+    g = Game(config={**VIEW_CFG, "view_margin": 30}, maps={"Test": TEST_MAP})
+    a, b = g.join("a"), g.join("b")
+    g.choose_team(a.id, "a")
+    g.choose_team(b.id, "b")
+    g.start(60, now=0)
+    g.set_view(a.id, 2.0)
+    place(a, 500, 350)
+    place(b, 725, 350)
+    assert seen_by(g, a.id, b)
+    place(b, 735, 350)
+    assert not seen_by(g, a.id, b)
+
+
+def test_own_position_always_sent_and_dead_see_from_where_they_died():
+    g, (a, b), t = view_game("a", "b")
+    g.set_view(a.id, 2.0)
+    place(a, 500, 350)
+    place(b, 900, 600)
+    assert seen_by(g, a.id, a) and not seen_by(g, a.id, b)
+    a.alive = False
+    assert seen_by(g, a.id, a)
+    place(b, 550, 350)
+    assert seen_by(g, a.id, b)                      # dead a still sees around (500, 350)
+    b.alive = False
+    assert not seen_by(g, a.id, b)                  # dead bodies aren't drawn, so not sent
+
+
+def test_bullets_only_sent_when_on_screen():
+    g, (a, b), t = view_game("a", "b")
+    g.set_view(a.id, 2.0)
+    place(a, 500, 350)
+    place(b, 600, 350)
+    g.shoot(b.id, math.pi, now=t)                   # starts at b, on a's screen
+    assert len(g.view_for(g.snapshot(), a.id)["bullets"]) == 1
+    g.bullets.clear()
+    place(b, 900, 600)
+    g.shoot(b.id, 0, now=t + 1)                     # off a's screen
+    assert g.view_for(g.snapshot(), a.id)["bullets"] == []
+    assert len(g.view_for(g.snapshot(), b.id)["bullets"]) == 1
+
+
+def test_viewers_outside_the_match_see_no_positions():
+    g, a, b, t = running_duel()
+    outsider = g.join("watcher")
+    g.shoot(a.id, 0, now=t)
+    for viewer in (outsider.id, None):
+        view = g.view_for(g.snapshot(), viewer)
+        assert all("x" not in p for p in view["players"])
+        assert view["bullets"] == []
+    assert len(g.snapshot()["players"]) == 3  # the full snapshot (admin) is untouched

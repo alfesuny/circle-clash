@@ -11,6 +11,9 @@ Simulates a LAN party:
     socket is alive (the ghost/auto-running player bug).
   * One player joins mid-match and jumps into a team; one more tries to join
     when the server is full.
+  * Every bot reports a 16:9 window; the server must only ever send it the
+    players on its screen.
+  * Afterwards: end -> results -> lobby -> map change -> a second short match.
 The admin starts the match through the REST API. At the end it prints the
 snapshot timing seen by healthy bots and checks the invariants.
 """
@@ -35,6 +38,9 @@ def admin(base: str, path: str, token: str | None = None, body: dict | None = No
         return json.loads(r.read())
 
 
+ASPECT = 16 / 9  # window shape every bot reports
+
+
 class Bot:
     def __init__(self, url: str, name: str, team: str | None):
         self.url, self.name, self.team = url, name, team
@@ -44,10 +50,13 @@ class Bot:
         self.last_state: dict | None = None
         self.rejected: dict | None = None
         self.keys = {"w": False, "a": False, "s": False, "d": False}
+        self.config: dict = {}
+        self.max_seen = [0.0, 0.0]   # furthest |dx|, |dy| of another player we were sent
+        self.hidden_seen = 0         # states in which some in-match player was hidden from us
 
     async def connect(self, resume: bool = False, max_queue: int | None = 16):
         self.ws = await websockets.connect(self.url, max_queue=max_queue)
-        await self._recv_until("hello")
+        self.config = (await self._recv_until("hello"))["config"]
         msg = {"type": "join", "name": self.name}
         if resume:
             msg["resume"] = {"id": self.player_id, "token": self.token}
@@ -57,6 +66,7 @@ class Bot:
             self.rejected = m
             return False
         self.player_id, self.token = m["player_id"], m["resume_token"]
+        await self.ws.send(json.dumps({"type": "view", "aspect": ASPECT}))
         if self.team and not resume:
             await self.ws.send(json.dumps({"type": "team", "team": self.team}))
         if max_queue != 1:  # keep reading, like a browser does (the slow client doesn't)
@@ -74,6 +84,18 @@ class Bot:
             return None
         return next((p for p in self.last_state["players"] if p["id"] == self.player_id), None)
 
+    def check_view(self, state: dict) -> None:
+        me = next((p for p in state["players"] if p["id"] == self.player_id), None)
+        if state["game_state"] != "RUNNING" or not me or me.get("x") is None:
+            return
+        others = [p for p in state["players"] if p["id"] != self.player_id and p["in_match"]]
+        for p in others:
+            if p.get("x") is not None:
+                self.max_seen[0] = max(self.max_seen[0], abs(p["x"] - me["x"]))
+                self.max_seen[1] = max(self.max_seen[1], abs(p["y"] - me["y"]))
+        if any(p.get("x") is None and p["alive"] for p in others):
+            self.hidden_seen += 1
+
     async def reader(self):
         try:
             async for text in self.ws:
@@ -81,12 +103,14 @@ class Bot:
                 if m["type"] == "state":
                     self.state_times.append(time.monotonic())
                     self.last_state = m
+                    self.check_view(m)
         except websockets.ConnectionClosed:
             pass
 
     async def play(self, until: float):
         """Wander toward the middle of the map with a 250 ms key heartbeat,
-        aiming and shooting at the nearest visible enemy."""
+        shooting at the nearest enemy the server lets it see (only those on
+        its screen are sent), or in a random direction when it sees none."""
         next_change = 0.0
         try:
             while time.monotonic() < until:
@@ -186,6 +210,24 @@ async def main():
     status = admin(base, "/api/admin/status", token)
     admin(base, "/api/admin/end", token, {})
 
+    # Full cycle: results reach the players, back to the lobby, another map,
+    # a second short match that the timer ends by itself.
+    await asyncio.sleep(0.5)
+    results_ok = all((b.last_state or {}).get("results") for b in bots)
+    admin(base, "/api/admin/lobby", token, {})
+    maps = [m["id"] for m in admin(base, "/api/admin/status", token)["maps"]]
+    other_map = next(m for m in maps if m != status["map_id"])
+    admin(base, "/api/admin/map", token, {"map_id": other_map})
+    admin(base, "/api/admin/start", token, {"duration": 10})
+    t1 = time.monotonic()
+    await asyncio.gather(*[b.play(t1 + 6) for b in bots[:4]])
+    while time.monotonic() - t1 < 20 and admin(base, "/api/admin/status", token)["game_state"] != "ENDED":
+        await asyncio.sleep(0.5)
+    second = admin(base, "/api/admin/status", token)
+    second_ok = second["game_state"] == "ENDED" and second["map_id"] == other_map and second["results"]
+    print(f"Second match on {other_map} ended by its timer: {bool(second_ok)}")
+    admin(base, "/api/admin/lobby", token, {})
+
     # ---------------------------------------------------------------- report
     window = [t for t in bots[0].state_times if t0 <= t <= until]
     deaths = sum(p["deaths"] for p in status["players"])
@@ -196,6 +238,14 @@ async def main():
           f"p99 {sorted(all_gaps)[int(len(all_gaps) * 0.99)]:.1f} ms, max {max(all_gaps):.1f} ms")
     names = [p["name"] for p in status["players"] if p["connected"]]
     late_row = late.me()
+    span, aspect = bots[0].config["camera_view_span"], min(ASPECT, bots[0].config["max_view_aspect"])
+    # The camera stops at the map's edges, so a player can be up to a full
+    # screen away; allow a soldier's size of margin on top.
+    limit = (span * aspect + 100, span + 100)
+    furthest = [max(b.max_seen[i] for b in bots) for i in (0, 1)]
+    print(f"Furthest player sent to a bot: dx {furthest[0]:.0f} (limit {limit[0]:.0f}), "
+          f"dy {furthest[1]:.0f} (limit {limit[1]:.0f}); "
+          f"states where someone was hidden: {sum(b.hidden_seen for b in bots)}")
     checks = {
         "no snapshot gap > 250 ms (no freeze)": max(all_gaps) < 250,
         "blip player exists exactly once": names.count("blip") == 1,
@@ -203,6 +253,10 @@ async def main():
         "slow client dropped, others unaffected": slow_dropped,
         "server-full join rejected at 14": full and connected == 14,
         f"kills happened ({deaths} deaths)": deaths > 0,
+        "only players on screen were sent": furthest[0] <= limit[0] and furthest[1] <= limit[1],
+        "off-screen players were hidden": sum(b.hidden_seen for b in bots) > 0,
+        "results reached every bot": results_ok,
+        "lobby -> map change -> second match -> timer end": bool(second_ok),
     }
     for name, ok in checks.items():
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
