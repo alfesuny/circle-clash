@@ -65,7 +65,7 @@
       case "hello": {
         hello = msg;
         mapId = previewKey = null;
-        Render.init($("canvas"), msg.config, msg.teams);
+        Render.init($("canvas"), msg.config, msg.teams, $("minimap"));
         buildTeamButtons();
         const s = loadSession();
         if (s && s.name) sendJoin(s.name); // refresh / reconnect: rejoin automatically

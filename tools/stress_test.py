@@ -11,8 +11,9 @@ Simulates a LAN party:
     socket is alive (the ghost/auto-running player bug).
   * One player joins mid-match and jumps into a team; one more tries to join
     when the server is full.
-  * Every bot reports a 16:9 window; the server must only ever send it the
-    players on its screen.
+  * Every bot reports a 16:9 window. The server must send it all its
+    teammates, and enemies only while they're on its own or a teammate's
+    screen (shared team vision, for the minimap).
   * Afterwards: end -> results -> lobby -> map change -> a second short match.
 The admin starts the match through the REST API. At the end it prints the
 snapshot timing seen by healthy bots and checks the invariants.
@@ -51,8 +52,9 @@ class Bot:
         self.rejected: dict | None = None
         self.keys = {"w": False, "a": False, "s": False, "d": False}
         self.config: dict = {}
-        self.max_seen = [0.0, 0.0]   # furthest |dx|, |dy| of another player we were sent
-        self.hidden_seen = 0         # states in which some in-match player was hidden from us
+        self.worst_enemy = 0.0       # > 1: an enemy was sent that no one in the team had on screen
+        self.hidden_seen = 0         # states in which some living enemy was hidden from us
+        self.mate_missing = 0        # states in which a teammate's position was missing
 
     async def connect(self, resume: bool = False, max_queue: int | None = 16):
         self.ws = await websockets.connect(self.url, max_queue=max_queue)
@@ -89,11 +91,21 @@ class Bot:
         if state["game_state"] != "RUNNING" or not me or me.get("x") is None:
             return
         others = [p for p in state["players"] if p["id"] != self.player_id and p["in_match"]]
-        for p in others:
-            if p.get("x") is not None:
-                self.max_seen[0] = max(self.max_seen[0], abs(p["x"] - me["x"]))
-                self.max_seen[1] = max(self.max_seen[1], abs(p["y"] - me["y"]))
-        if any(p.get("x") is None and p["alive"] for p in others):
+        mates = [p for p in others if p["team"] == me["team"]]
+        enemies = [p for p in others if p["team"] != me["team"]]
+        if any(p.get("x") is None for p in mates):
+            self.mate_missing += 1
+        # Everyone in the team views the same aspect; the camera stops at the
+        # map's edges, so an on-screen player can be up to a full screen away
+        # from its viewer (plus a soldier's size of margin).
+        span = self.config["camera_view_span"]
+        lim = (span * min(ASPECT, self.config["max_view_aspect"]) + 100, span + 100)
+        eyes = [me] + [p for p in mates if p.get("x") is not None]
+        for e in enemies:
+            if e.get("x") is not None:
+                nearest = min(max(abs(e["x"] - v["x"]) / lim[0], abs(e["y"] - v["y"]) / lim[1]) for v in eyes)
+                self.worst_enemy = max(self.worst_enemy, nearest)
+        if any(p.get("x") is None and p["alive"] for p in enemies):
             self.hidden_seen += 1
 
     async def reader(self):
@@ -238,14 +250,10 @@ async def main():
           f"p99 {sorted(all_gaps)[int(len(all_gaps) * 0.99)]:.1f} ms, max {max(all_gaps):.1f} ms")
     names = [p["name"] for p in status["players"] if p["connected"]]
     late_row = late.me()
-    span, aspect = bots[0].config["camera_view_span"], min(ASPECT, bots[0].config["max_view_aspect"])
-    # The camera stops at the map's edges, so a player can be up to a full
-    # screen away; allow a soldier's size of margin on top.
-    limit = (span * aspect + 100, span + 100)
-    furthest = [max(b.max_seen[i] for b in bots) for i in (0, 1)]
-    print(f"Furthest player sent to a bot: dx {furthest[0]:.0f} (limit {limit[0]:.0f}), "
-          f"dy {furthest[1]:.0f} (limit {limit[1]:.0f}); "
-          f"states where someone was hidden: {sum(b.hidden_seen for b in bots)}")
+    worst = max(b.worst_enemy for b in bots)
+    print(f"Furthest enemy sent, relative to a full screen from the nearest teammate: {worst:.2f} (max 1); "
+          f"states with a hidden enemy: {sum(b.hidden_seen for b in bots)}; "
+          f"states missing a teammate: {sum(b.mate_missing for b in bots)}")
     checks = {
         "no snapshot gap > 250 ms (no freeze)": max(all_gaps) < 250,
         "blip player exists exactly once": names.count("blip") == 1,
@@ -253,8 +261,9 @@ async def main():
         "slow client dropped, others unaffected": slow_dropped,
         "server-full join rejected at 14": full and connected == 14,
         f"kills happened ({deaths} deaths)": deaths > 0,
-        "only players on screen were sent": furthest[0] <= limit[0] and furthest[1] <= limit[1],
-        "off-screen players were hidden": sum(b.hidden_seen for b in bots) > 0,
+        "enemies only sent while on the team's screens": worst <= 1,
+        "enemies off every team screen were hidden": sum(b.hidden_seen for b in bots) > 0,
+        "teammates always sent (minimap)": sum(b.mate_missing for b in bots) == 0,
         "results reached every bot": results_ok,
         "lobby -> map change -> second match -> timer end": bool(second_ok),
     }

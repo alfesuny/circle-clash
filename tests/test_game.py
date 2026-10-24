@@ -574,21 +574,52 @@ def test_real_config_view_is_span_tall_plus_margin():
     assert x1 - x0 == pytest.approx(span * 16 / 9 + 2 * m)
 
 
-def test_only_what_is_on_screen_is_sent():
-    g, (a, b, c), t = view_game("a", "b", "a")
+def test_enemies_only_sent_while_on_screen():
+    g, (a, b), t = view_game("a", "b")
     g.set_view(a.id, 2.0)
     place(a, 500, 350)                              # screen: x 300-700, y 250-450
     place(b, 690, 440)
     assert seen_by(g, a.id, b)
     place(b, 710, 350)
     assert not seen_by(g, a.id, b)
-    place(c, 500, 460)                              # teammates too
-    assert not seen_by(g, a.id, c)
-    place(c, 500, 440)
-    assert seen_by(g, a.id, c)
     row = next(p for p in g.view_for(g.snapshot(), a.id)["players"] if p["id"] == b.id)
     assert row["name"] == "p1" and row["team"] == "b"  # still listed, just not where
     assert "health" not in row and "angle" not in row
+
+
+def test_teammates_are_always_sent():
+    g, (a, c), t = view_game("a", "a")
+    g.set_view(a.id, 2.0)
+    place(a, 500, 350)
+    place(c, 950, 650)                              # far off a's screen
+    assert seen_by(g, a.id, c) and seen_by(g, c.id, a)
+    c.alive = False                                 # dead too: their camera stays where they died
+    assert seen_by(g, a.id, c) and seen_by(g, c.id, c)
+
+
+def test_enemy_spotted_by_a_teammate_is_shared():
+    g, (a, b, c), t = view_game("a", "b", "a")
+    for p in (a, b, c):
+        g.set_view(p.id, 2.0)
+    place(a, 150, 150)                              # a's screen: x 0-400, y 50-250 (clamped)
+    place(c, 850, 550)                              # c's screen: x 600-1000, y 450-650
+    place(b, 800, 500)                              # on c's screen only
+    assert seen_by(g, a.id, b) and seen_by(g, c.id, b)
+    place(b, 500, 350)                              # on nobody's screen
+    assert not seen_by(g, a.id, b) and not seen_by(g, c.id, b)
+    g.disconnect(c.id)                              # a teammate who left spots nothing
+    place(b, 800, 500)
+    assert not seen_by(g, a.id, b)
+
+
+def test_everyone_in_a_team_gets_the_same_view():
+    g, (a, b, c), t = view_game("a", "b", "a")
+    place(a, 150, 150)
+    place(c, 850, 550)
+    place(b, 800, 500)
+    snap = g.snapshot()
+    assert g.view_for(snap, a.id) == g.view_for(snap, c.id) == g.team_view(snap, "a")
+    assert g.view_group(a.id) == "a" and g.view_group(None) is None
 
 
 def test_walls_do_not_hide_anything_on_screen():
@@ -623,12 +654,13 @@ def test_own_position_always_sent_and_dead_see_from_where_they_died():
     place(b, 550, 350)
     assert seen_by(g, a.id, b)                      # dead a still sees around (500, 350)
     b.alive = False
-    assert not seen_by(g, a.id, b)                  # dead bodies aren't drawn, so not sent
+    assert not seen_by(g, a.id, b)                  # dead enemies aren't drawn, so not sent
 
 
-def test_bullets_only_sent_when_on_screen():
+def test_bullets_only_sent_when_a_teammate_has_them_on_screen():
     g, (a, b), t = view_game("a", "b")
     g.set_view(a.id, 2.0)
+    g.set_view(b.id, 2.0)
     place(a, 500, 350)
     place(b, 600, 350)
     g.shoot(b.id, math.pi, now=t)                   # starts at b, on a's screen

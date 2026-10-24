@@ -185,6 +185,21 @@ def test_stalled_client_does_not_block_others(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_connection_reset_noise_is_dropped_but_other_errors_reported():
+    class Loop:
+        reported = []
+
+        def default_exception_handler(self, context):
+            self.reported.append(context)
+
+    loop = Loop()
+    server.quiet_connection_resets(loop, {"message": "x", "exception": ConnectionResetError(10054)})
+    server.quiet_connection_resets(loop, {"message": "x", "exception": ConnectionAbortedError()})
+    assert loop.reported == []
+    server.quiet_connection_resets(loop, {"message": "real", "exception": ValueError()})
+    assert [c["message"] for c in loop.reported] == ["real"]
+
+
 def test_browsers_always_revalidate_pages_and_scripts(client):
     """Stale cached scripts from an older version broke joining (page loaded,
     JOIN did nothing). Every page/asset must be revalidated."""

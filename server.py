@@ -70,6 +70,28 @@ def setup_logging(to_file: bool) -> None:
     log.propagate = False
 
 
+def raise_priority() -> None:
+    """Ask Windows to schedule the server ahead of normal programs. The host
+    usually plays in a browser on the same (often small) laptop; when the CPU
+    is saturated, a normal-priority server was paused by the OS for whole
+    seconds, freezing the game for everyone. The server only uses a fraction
+    of one core, so this costs the other programs very little."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+        kernel32 = ctypes.windll.kernel32
+        # HANDLE is pointer-sized: without these, ctypes truncates it to 32 bits
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        if not kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS):
+            log.warning("Could not raise the server's priority")
+    except Exception:
+        log.warning("Could not raise the server's priority", exc_info=True)
+
+
 def disable_console_quickedit() -> None:
     """On Windows, clicking in the console window starts a text selection that
     pauses every write to it, which used to freeze the whole server. Turn
@@ -171,14 +193,16 @@ clients = Clients()
 
 
 def state_texts(snap: dict) -> Callable[[str | None], str]:
-    """Per-player JSON of one tick's snapshot, filtered to what that player can
-    see, encoded once per player even if they have several sockets."""
+    """JSON of one tick's snapshot as each player sees it. Teammates share
+    their view, so it's encoded once per team (plus once for everyone not
+    in the match)."""
     cache: dict[str | None, str] = {}
 
     def text_for(player_id: str | None) -> str:
-        if player_id not in cache:
-            cache[player_id] = json.dumps(game.view_for(snap, player_id), separators=(",", ":"))
-        return cache[player_id]
+        group = game.view_group(player_id)
+        if group not in cache:
+            cache[group] = json.dumps(game.team_view(snap, group), separators=(",", ":"))
+        return cache[group]
 
     return text_for
 
@@ -252,9 +276,20 @@ def lan_addresses() -> list[str]:
     return sorted(a for a in addrs if not a.startswith("127."))
 
 
+def quiet_connection_resets(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Event-loop exception handler. On Windows, asyncio prints a traceback
+    when a browser drops its connection abruptly (page reload, closed laptop):
+    its cleanup tries to shut down a socket that is already gone (CPython
+    bpo-39010). Nothing is wrong, so skip those; report everything else."""
+    if isinstance(context.get("exception"), (ConnectionResetError, ConnectionAbortedError)):
+        return
+    loop.default_exception_handler(context)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     setup_logging(to_file=False)  # no-op if __main__ already set it up (with a file)
+    asyncio.get_running_loop().set_exception_handler(quiet_connection_resets)
     # The banner first: lan_addresses() does a DNS lookup that can take
     # seconds on Windows, and must not run while the game loop is ticking.
     print("\n" + "=" * 56)
@@ -495,6 +530,7 @@ if __name__ == "__main__":
 
     disable_console_quickedit()
     setup_logging(to_file=True)
+    raise_priority()
     threading.Thread(target=watchdog, name="watchdog", daemon=True).start()
     # Pings detect vanished clients (closed laptop, dropped Wi-Fi) within seconds.
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning",

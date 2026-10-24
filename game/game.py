@@ -475,22 +475,31 @@ class Game:
         m = self.cfg["view_margin"]
         return cx - hw - m, cy - hh - m, cx + hw + m, cy + hh + m
 
-    def view_for(self, snap: dict, viewer_id: str | None) -> dict:
-        """snap as one player sees it: other players' positions (teammates
-        included) and bullets only if they're on that player's screen. A dead
-        player keeps seeing from where they died; anyone not in the match sees
-        no positions at all."""
-        viewer = self.players.get(viewer_id) if viewer_id is not None else None
-        sees = viewer is not None and viewer.in_match and viewer.connected
-        x0, y0, x1, y1 = self.view_rect(viewer) if sees else (0, 0, -1, -1)  # empty when not
+    def view_group(self, viewer_id: str | None) -> str | None:
+        """Whose eyes a viewer sees the match through: their team's if they're
+        playing in it, else None (no positions at all). Everyone in a team
+        gets the same view, so the server encodes it once per team."""
+        p = self.players.get(viewer_id) if viewer_id is not None else None
+        return p.team if p is not None and p.in_match and p.connected else None
 
-        def on_screen(x: float, y: float) -> bool:
-            return x0 <= x <= x1 and y0 <= y <= y1
+    def view_for(self, snap: dict, viewer_id: str | None) -> dict:
+        """snap as one player sees it (see team_view)."""
+        return self.team_view(snap, self.view_group(viewer_id))
+
+    def team_view(self, snap: dict, team: str | None) -> dict:
+        """snap as a team sees it, with shared team vision: teammates
+        everywhere (alive or dead, for the minimap and the camera), enemies and
+        bullets only while they're on some teammate's screen. A dead player's
+        screen stays where they died. team None sees no positions."""
+        rects = [self.view_rect(p) for p in self.active_players() if p.team == team] if team else []
+
+        def spotted(x: float, y: float) -> bool:
+            return any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in rects)
 
         players = []
         for row in snap["players"]:
-            if "x" in row and row["id"] != viewer_id and not (row["alive"] and on_screen(row["x"], row["y"])):
+            if "x" in row and row["team"] != team and not (row["alive"] and spotted(row["x"], row["y"])):
                 row = {k: v for k, v in row.items() if k not in POSITION_FIELDS}
             players.append(row)
-        bullets = [b for b in snap["bullets"] if on_screen(b["x"], b["y"])]
+        bullets = [b for b in snap["bullets"] if spotted(b["x"], b["y"])]
         return {**snap, "players": players, "bullets": bullets}

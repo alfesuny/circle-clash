@@ -9,10 +9,15 @@ const Render = (() => {
   let viewW = 0, viewH = 0;   // canvas size in CSS pixels
   const cam = { x: 0, y: 0 }; // world point at the centre of the screen
   const images = {};          // image url -> HTMLImageElement
+  let mini = null, mctx = null;           // minimap canvas (top left)
+  let miniW = 0, miniH = 0, miniDpr = 1;  // its size in CSS pixels
+  let miniBg = null, miniKey = null;      // offscreen: map, walls and spawns at minimap size
 
-  function init(canvasEl, config, teams) {
+  function init(canvasEl, config, teams, minimapEl) {
     canvas = canvasEl;
     ctx = canvas.getContext("2d");
+    mini = minimapEl;
+    mctx = mini.getContext("2d");
     cfg = config;
     teamColor = Object.fromEntries(teams.map((t) => [t.id, t.color]));
   }
@@ -55,6 +60,15 @@ const Render = (() => {
     const span = cfg.camera_view_span;
     scale = Math.max(Math.min(viewW, viewH) / span, Math.max(viewW, viewH) / (span * cfg.max_view_aspect));
     setCamera(cam.x, cam.y);
+    // minimap: the whole map, up to 220 px wide (less on small windows)
+    miniW = Math.round(Math.min(220, viewW * 0.3));
+    miniH = Math.round(miniW * map.height / map.width);
+    miniDpr = dpr;
+    mini.style.width = miniW + "px";
+    mini.style.height = miniH + "px";
+    mini.width = Math.floor(miniW * miniDpr);
+    mini.height = Math.floor(miniH * miniDpr);
+    miniKey = null;
   }
 
   // Centre the view on (x, y) without showing past the world's edges (on an
@@ -321,8 +335,70 @@ const Render = (() => {
     ctx.fillText(p.name, p.x, top - 15);
   }
 
-  // The server only sends the players and bullets that are on this player's
-  // screen (the camera follows them; see setCamera).
+  // ------------------------------------------------------------ minimap
+  // Map art dimmed, walls drawn solid so the corridors read at this size,
+  // spawn zones (own one highlighted). Rebuilt when the map, team, size or
+  // image readiness changes.
+  function buildMiniBg(team) {
+    miniBg = miniBg || document.createElement("canvas");
+    miniBg.width = mini.width;
+    miniBg.height = mini.height;
+    const c = miniBg.getContext("2d");
+    c.setTransform(mini.width / map.width, 0, 0, mini.height / map.height, 0, 0);
+    paintMap(c, map, team, map.width / 150);
+    c.fillStyle = "rgba(0,0,0,0.35)";
+    c.fillRect(0, 0, map.width, map.height);
+    c.fillStyle = "rgba(200,208,222,0.9)";
+    for (const w of map.walls) c.fillRect(w.x, w.y, w.width, w.height);
+  }
+
+  // Dot for a player at minimap pixel (x, y). Enemies are diamonds, so they
+  // read apart from teammates without relying on colour alone.
+  function miniDot(x, y, color, enemy, isMe) {
+    const r = isMe ? 4.5 : 3.5;
+    mctx.beginPath();
+    if (enemy) {
+      mctx.moveTo(x, y - r - 1); mctx.lineTo(x + r + 1, y); mctx.lineTo(x, y + r + 1); mctx.lineTo(x - r - 1, y);
+      mctx.closePath();
+    } else {
+      mctx.arc(x, y, r, 0, Math.PI * 2);
+    }
+    mctx.fillStyle = color;
+    mctx.fill();
+    mctx.lineWidth = isMe ? 2 : 1;
+    mctx.strokeStyle = isMe ? "#ffffff" : "rgba(0,0,0,0.8)";
+    mctx.stroke();
+  }
+
+  // The whole map with your screen's outline, you, your teammates and the
+  // enemies your team can see (the server sends no other enemies).
+  function drawMinimap(view, self) {
+    if (!miniW) return;
+    const team = self ? self.team : null;
+    const key = `${map.id}|${team}|${mini.width}x${mini.height}|${imageReady(map)}`;
+    if (key !== miniKey) {
+      buildMiniBg(team);
+      miniKey = key;
+    }
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    mctx.clearRect(0, 0, mini.width, mini.height);
+    mctx.drawImage(miniBg, 0, 0);
+    mctx.setTransform(miniDpr, 0, 0, miniDpr, 0, 0); // CSS pixels from here
+    const kx = miniW / map.width, ky = miniH / map.height;
+    const hw = viewW / 2 / scale, hh = viewH / 2 / scale;
+    mctx.strokeStyle = "rgba(255,255,255,0.75)";
+    mctx.lineWidth = 1;
+    mctx.strokeRect((cam.x - hw) * kx + 0.5, (cam.y - hh) * ky + 0.5, 2 * hw * kx - 1, 2 * hh * ky - 1);
+    for (const p of view.players) {
+      if (!p.in_match || !p.alive || p.x === undefined || p === self) continue;
+      miniDot(p.x * kx, p.y * ky, teamColor[p.team] || "#888888", p.team !== team, false);
+    }
+    if (self && self.alive && self.x !== undefined) miniDot(self.x * kx, self.y * ky, teamColor[self.team], false, true);
+  }
+
+  // The server sends teammates wherever they are and enemies/bullets only
+  // while someone in the team has them on screen; the camera follows the
+  // local player (see setCamera).
   function draw(view, meId, now) {
     if (!ctx || !map || !viewW) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -331,13 +407,16 @@ const Render = (() => {
     worldTransform(ctx);
     paintMap(ctx, map, null, 3 / scale);
     drawBullets(view.bullets);
-    let me = null;
+    // skip soldiers that are off screen (teammates are sent from anywhere)
+    const hw = viewW / 2 / scale + 60, hh = viewH / 2 / scale + 60;
+    const self = view.players.find((p) => p.id === meId) || null;
     for (const p of view.players) {
-      if (!p.in_match || !p.alive || p.x === undefined) continue;
-      if (p.id === meId) { me = p; continue; }
+      if (!p.in_match || !p.alive || p.x === undefined || p === self) continue;
+      if (Math.abs(p.x - cam.x) > hw || Math.abs(p.y - cam.y) > hh) continue;
       drawPlayer(p, false, now);
     }
-    if (me) drawPlayer(me, true, now); // own player on top
+    if (self && self.in_match && self.alive && self.x !== undefined) drawPlayer(self, true, now); // own player on top
+    drawMinimap(view, self);
   }
 
   return { init, setMap, resize, setCamera, toWorld, draw, drawPreview };
